@@ -1,0 +1,3 @@
+[default]
+description = "Default permissions for the HTTP client plugin"
+permissions = ["allow-fetch", "allow-abort-request"]
