@@ -1,0 +1,16 @@
+[package]
+name = "tauri-app"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+
+[lib]
+name = "tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+tauri = { version = "2.9.3", features = [] }
+tauri-plugin-http-client = { path = "../../../" }
+
+[build-dependencies]
+tauri-build = { version = "2.0.5", features = [] }

@@ -1,0 +1,22 @@
+{
+   "productName": "HTTP Client Example",
+   "version": "0.1.0",
+   "identifier": "com.silvermine.httpClientExample",
+   "build": {
+      "devUrl": "http://localhost:5173",
+      "frontendDist": "../dist"
+   },
+   "app": {
+      "withGlobalTauri": false,
+      "windows": [
+         {
+            "title": "HTTP Client Plugin Demo",
+            "width": 900,
+            "height": 700
+         }
+      ]
+   },
+   "bundle": {
+      "active": false
+   }
+}

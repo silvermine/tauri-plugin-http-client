@@ -1,0 +1,9 @@
+{
+   "identifier": "default",
+   "description": "Default capability for the example app",
+   "windows": ["main"],
+   "permissions": [
+      "core:default",
+      "http-client:default"
+   ]
+}
