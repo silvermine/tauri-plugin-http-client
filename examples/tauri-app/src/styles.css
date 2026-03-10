@@ -1,0 +1,378 @@
+/*
+ * HTTP Client Plugin Demo — Stylesheet
+ *
+ * Color palette: warm neutrals (stone tones) with teal accent.
+ * Designed for 960x720 desktop window and mobile webviews.
+ * 3-space indentation per project convention.
+ */
+
+/* --- Reset & base --- */
+
+*,
+*::before,
+*::after {
+   margin: 0;
+   padding: 0;
+   box-sizing: border-box;
+}
+
+:root {
+   --color-bg: #f7f6f4;
+   --color-surface: #ffffff;
+   --color-text: #2c2926;
+   --color-text-subdued: #78716c;
+   --color-border: #d6d3d1;
+   --color-border-subtle: #e7e5e4;
+
+   --color-accent: #0d7377;
+   --color-accent-hover: #0a5c5f;
+   --color-accent-text: #ffffff;
+
+   --color-danger: #b91c1c;
+   --color-danger-hover: #991b1b;
+   --color-danger-bg: #fef2f2;
+   --color-danger-text: #dc2626;
+
+   --color-output-bg: #1c1917;
+   --color-output-text: #d6d3d1;
+   --color-output-accent: #5eead4;
+
+   --color-code-bg: #e7e5e4;
+
+   --radius-sm: 4px;
+   --radius-md: 6px;
+   --radius-lg: 8px;
+
+   --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.08);
+
+   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+   --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+
+   --transition-fast: 120ms ease;
+}
+
+html {
+   font-size: 16px;
+   -webkit-text-size-adjust: 100%;
+}
+
+body {
+   font-family: var(--font-sans);
+   background: var(--color-bg);
+   color: var(--color-text);
+   line-height: 1.5;
+   padding: 1.25rem;
+   min-height: 100vh;
+}
+
+/* --- App header --- */
+
+.app-header {
+   max-width: 960px;
+   margin: 0 auto 1.25rem;
+}
+
+.app-header h1 {
+   font-size: 1.25rem;
+   font-weight: 700;
+   letter-spacing: -0.01em;
+   line-height: 1.25;
+}
+
+.subtitle {
+   color: var(--color-text-subdued);
+   font-size: 0.8125rem;
+   margin-top: 0.25rem;
+   line-height: 1.4;
+}
+
+.subtitle .separator {
+   display: inline-block;
+   width: 3px;
+   height: 3px;
+   border-radius: 50%;
+   background: var(--color-text-subdued);
+   vertical-align: middle;
+   margin: 0 0.5rem;
+   opacity: 0.6;
+}
+
+/* --- Panel grid --- */
+
+.panels {
+   display: grid;
+   grid-template-columns: 1fr;
+   gap: 0.875rem;
+   max-width: 960px;
+   margin: 0 auto;
+}
+
+@media (min-width: 640px) {
+   .panels {
+      grid-template-columns: repeat(2, 1fr);
+   }
+}
+
+/* --- Panel --- */
+
+.panel {
+   background: var(--color-surface);
+   border: 1px solid var(--color-border-subtle);
+   border-radius: var(--radius-lg);
+   padding: 1rem;
+   box-shadow: var(--shadow-panel);
+   display: flex;
+   flex-direction: column;
+}
+
+.panel h2 {
+   font-size: 0.875rem;
+   font-weight: 600;
+   letter-spacing: 0.01em;
+   text-transform: uppercase;
+   color: var(--color-accent);
+   margin-bottom: 0.5rem;
+}
+
+.hint {
+   font-size: 0.8125rem;
+   color: var(--color-text-subdued);
+   margin-bottom: 0.5rem;
+   line-height: 1.4;
+}
+
+/* --- Controls --- */
+
+.controls {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 0.5rem;
+   align-items: flex-start;
+   margin-bottom: 0.75rem;
+}
+
+.controls input[type="text"] {
+   flex: 1;
+   min-width: 0;
+   padding: 0.4rem 0.6rem;
+   border: 1px solid var(--color-border);
+   border-radius: var(--radius-sm);
+   font-size: 0.8125rem;
+   font-family: var(--font-mono);
+   color: var(--color-text);
+   background: var(--color-surface);
+   transition: border-color var(--transition-fast);
+}
+
+.controls input[type="text"]:focus {
+   outline: none;
+   border-color: var(--color-accent);
+   box-shadow: 0 0 0 2px rgba(13, 115, 119, 0.15);
+}
+
+.controls textarea {
+   width: 100%;
+   padding: 0.4rem 0.6rem;
+   border: 1px solid var(--color-border);
+   border-radius: var(--radius-sm);
+   font-size: 0.8125rem;
+   font-family: var(--font-mono);
+   color: var(--color-text);
+   background: var(--color-surface);
+   resize: vertical;
+   transition: border-color var(--transition-fast);
+}
+
+.controls textarea:focus {
+   outline: none;
+   border-color: var(--color-accent);
+   box-shadow: 0 0 0 2px rgba(13, 115, 119, 0.15);
+}
+
+/* --- Buttons --- */
+
+.btn {
+   padding: 0.4rem 0.75rem;
+   border: 1px solid var(--color-border);
+   border-radius: var(--radius-sm);
+   background: var(--color-surface);
+   color: var(--color-text);
+   cursor: pointer;
+   font-size: 0.8125rem;
+   font-family: var(--font-sans);
+   font-weight: 500;
+   line-height: 1.4;
+   white-space: nowrap;
+   transition:
+      background var(--transition-fast),
+      border-color var(--transition-fast),
+      color var(--transition-fast),
+      box-shadow var(--transition-fast);
+   -webkit-tap-highlight-color: transparent;
+}
+
+.btn:hover {
+   background: var(--color-bg);
+   border-color: var(--color-border);
+}
+
+.btn:active {
+   transform: translateY(0.5px);
+}
+
+.btn:focus-visible {
+   outline: 2px solid var(--color-accent);
+   outline-offset: 1px;
+}
+
+.btn:disabled {
+   opacity: 0.45;
+   cursor: not-allowed;
+   transform: none;
+}
+
+.btn-primary {
+   background: var(--color-accent);
+   border-color: var(--color-accent);
+   color: var(--color-accent-text);
+}
+
+.btn-primary:hover:not(:disabled) {
+   background: var(--color-accent-hover);
+   border-color: var(--color-accent-hover);
+}
+
+.btn-danger {
+   background: var(--color-surface);
+   border-color: var(--color-danger);
+   color: var(--color-danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+   background: var(--color-danger-bg);
+}
+
+/* --- Output area --- */
+
+.output {
+   background: var(--color-output-bg);
+   color: var(--color-output-text);
+   padding: 0.75rem;
+   border-radius: var(--radius-md);
+   font-size: 0.75rem;
+   font-family: var(--font-mono);
+   overflow-x: auto;
+   white-space: pre-wrap;
+   word-break: break-word;
+   min-height: 3rem;
+   max-height: 260px;
+   overflow-y: auto;
+   flex: 1;
+   line-height: 1.5;
+}
+
+.output img {
+   max-width: 200px;
+   display: block;
+   margin-top: 0.5rem;
+   border-radius: var(--radius-sm);
+}
+
+/* Scrollbar styling for output areas */
+.output::-webkit-scrollbar {
+   width: 6px;
+   height: 6px;
+}
+
+.output::-webkit-scrollbar-track {
+   background: transparent;
+}
+
+.output::-webkit-scrollbar-thumb {
+   background: rgba(255, 255, 255, 0.15);
+   border-radius: 3px;
+}
+
+.output::-webkit-scrollbar-thumb:hover {
+   background: rgba(255, 255, 255, 0.25);
+}
+
+/* --- State classes --- */
+
+.error {
+   color: #f87171;
+}
+
+.loading {
+   color: var(--color-output-accent);
+}
+
+/* Loading dot animation */
+.loading::after {
+   content: '';
+   animation: dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes dots {
+   0% { content: ''; }
+   25% { content: '.'; }
+   50% { content: '..'; }
+   75% { content: '...'; }
+}
+
+/* --- Inline code --- */
+
+code {
+   background: var(--color-code-bg);
+   padding: 0.1rem 0.35rem;
+   border-radius: var(--radius-sm);
+   font-size: 0.85em;
+   font-family: var(--font-mono);
+}
+
+/* --- Responsive adjustments --- */
+
+/* Small screens: tighter spacing */
+@media (max-width: 639px) {
+   body {
+      padding: 1rem;
+   }
+
+   .app-header {
+      margin-bottom: 1rem;
+   }
+
+   .panel {
+      padding: 0.875rem;
+   }
+
+   .output {
+      max-height: 200px;
+   }
+
+   .subtitle .separator {
+      display: none;
+   }
+
+   .subtitle code:first-child {
+      display: block;
+      margin-bottom: 0.15rem;
+   }
+}
+
+/* Tall enough for comfortable two-column layout */
+@media (min-width: 640px) and (min-height: 600px) {
+   .panels {
+      gap: 0.75rem;
+   }
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+   *,
+   *::before,
+   *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+   }
+}
