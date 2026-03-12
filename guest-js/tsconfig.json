@@ -1,0 +1,17 @@
+{
+   "compilerOptions": {
+      "target": "es2021",
+      "module": "esnext",
+      "moduleResolution": "bundler",
+      "skipLibCheck": true,
+      "strict": true,
+      "noUnusedLocals": true,
+      "noImplicitAny": true,
+      "declaration": true,
+      "outDir": "../dist-js",
+      "esModuleInterop": true,
+      "forceConsistentCasingInFileNames": true
+   },
+   "include": ["index.ts"],
+   "exclude": ["node_modules", "../dist-js"]
+}

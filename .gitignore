@@ -19,3 +19,6 @@ Thumbs.db
 
 # Tauri
 /gen/
+
+# Example app artifacts
+examples/*/package-lock.json

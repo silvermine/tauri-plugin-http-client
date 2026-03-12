@@ -1,7 +1,10 @@
 {
    "extends": "@silvermine/typescript-config/tsconfig.esm.json",
-   "include": [],
+   "include": [
+      "./guest-js/*"
+   ],
    "exclude": [
+      "./guest-js/*.test.ts",
       "./tests/*",
       "**/node_modules/*"
    ],
