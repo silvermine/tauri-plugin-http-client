@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>HTTP Client Plugin Demo</title>
+   <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+   <h1>HTTP Client Plugin Demo</h1>
+   <p class="subtitle">
+      Demonstrates <code>@silvermine/tauri-plugin-http-client</code> capabilities.
+      Allowed domain: <code>httpbin.org</code>
+   </p>
+
+   <div class="panels">
+
+      <!-- GET Request Panel -->
+      <section class="panel">
+         <h2>GET Request</h2>
+         <div class="controls">
+            <input type="text" id="get-url" value="https://httpbin.org/get" placeholder="URL">
+            <button id="get-send">Send GET</button>
+         </div>
+         <pre id="get-output" class="output">Response will appear here...</pre>
+      </section>
+
+      <!-- POST Request Panel -->
+      <section class="panel">
+         <h2>POST Request</h2>
+         <div class="controls">
+            <input type="text" id="post-url" value="https://httpbin.org/post" placeholder="URL">
+            <textarea id="post-body" rows="3" placeholder="JSON body">{"greeting": "hello", "from": "tauri"}</textarea>
+            <button id="post-send">Send POST</button>
+         </div>
+         <pre id="post-output" class="output">Response will appear here...</pre>
+      </section>
+
+      <!-- Custom Headers Panel -->
+      <section class="panel">
+         <h2>Custom Headers</h2>
+         <p class="hint">
+            Sends custom headers via the <code>HttpHeaders</code> API and displays
+            multi-value response headers. Note: request headers are single-value per
+            name via <code>toRecord()</code>.
+         </p>
+         <div class="controls">
+            <button id="headers-send">Send with Custom Headers</button>
+         </div>
+         <pre id="headers-output" class="output">Response will appear here...</pre>
+      </section>
+
+      <!-- Abort Panel -->
+      <section class="panel">
+         <h2>Abort Request</h2>
+         <p class="hint">
+            Starts a 10-second delayed request, then aborts it.
+            Abort is best-effort; the request may complete before cancellation takes effect.
+         </p>
+         <div class="controls">
+            <button id="abort-start">Start Delayed Request</button>
+            <button id="abort-cancel" disabled>Abort</button>
+         </div>
+         <pre id="abort-output" class="output">Click "Start Delayed Request" to begin...</pre>
+      </section>
+
+      <!-- Error Handling Panel -->
+      <section class="panel">
+         <h2>Error Handling</h2>
+         <p class="hint">Triggers intentional errors to demonstrate <code>HttpClientError</code> codes.</p>
+         <div class="controls">
+            <button id="err-domain">Blocked Domain</button>
+            <button id="err-timeout">Timeout (1s)</button>
+            <button id="err-invalid">Invalid URL</button>
+         </div>
+         <pre id="err-output" class="output">Click a button to trigger an error...</pre>
+      </section>
+
+      <!-- Binary Response Panel -->
+      <section class="panel">
+         <h2>Binary Response</h2>
+         <p class="hint">Fetches an image using <code>response.bytes()</code> and displays it as a blob URL.</p>
+         <div class="controls">
+            <button id="binary-fetch">Fetch Image</button>
+         </div>
+         <div id="binary-output" class="output">
+            <span>Click "Fetch Image" to load a PNG from httpbin.org...</span>
+         </div>
+      </section>
+
+   </div>
+
+   <script type="module" src="/main.js"></script>
+</body>
+</html>
