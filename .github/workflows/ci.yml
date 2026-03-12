@@ -1,0 +1,63 @@
+name: CI
+
+on:
+   push: # Runs on push to any branch
+   pull_request:
+      branches: [ "master" ]
+
+env:
+   CARGO_TERM_COLOR: always
+
+jobs:
+   ci:
+      name: Continuous Integration
+      runs-on: ubuntu-latest
+
+      steps:
+         - name: Checkout repository
+           uses: actions/checkout@v4
+           with:
+              fetch-depth: 0
+
+         - name: Setup Node.js
+           uses: actions/setup-node@v4
+           with:
+              node-version-file: '.nvmrc'
+              cache: 'npm'
+
+         - name: Install system dependencies
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+         - name: Setup Rust toolchain
+           uses: actions-rust-lang/setup-rust-toolchain@v1
+           with:
+              toolchain: '1.89.0'
+              components: rustfmt, clippy
+              cache: true
+
+         - name: Install npm dependencies
+           run: npm ci
+
+         - name: Run standards checks
+           run: |
+             # Determine commitlint range
+             if [ "${{ github.event_name }}" = "pull_request" ]; then
+                export COMMITLINT_FROM="${{ github.event.pull_request.base.sha }}"
+             else
+                # For pushes, verify the before commit exists
+                if git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
+                   export COMMITLINT_FROM="${{ github.event.before }}"
+                else
+                   # Fallback: check only HEAD commit on force push or first push
+                   export COMMITLINT_FROM="HEAD~1"
+                fi
+             fi
+             npm run standards
+
+         - name: Run cargo check
+           run: cargo check --workspace --all-targets
+
+         - name: Run TypeScript and Rust tests
+           run: npm test
