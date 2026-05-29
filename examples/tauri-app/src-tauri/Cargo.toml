@@ -2,16 +2,16 @@
 name = "tauri-app"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.94.0"
 
 [lib]
 name = "tauri_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-serde = { version = "=1.0.228", features = ["derive"] }
-tauri = { version = "=2.10.3", features = [] }
+serde = { version = "1.0.228", features = ["derive"] }
+tauri = { version = "2.10.3", features = [] }
 tauri-plugin-http-client = { path = "../../../" }
 
 [build-dependencies]
-tauri-build = { version = "=2.5.6", features = [] }
+tauri-build = { version = "2.5.6", features = [] }
