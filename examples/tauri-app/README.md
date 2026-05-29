@@ -5,7 +5,7 @@ A minimal Tauri v2 application demonstrating the `@silvermine/tauri-plugin-http-
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://rustup.rs/) (1.89+, edition 2024)
+- [Rust](https://rustup.rs/) (1.94+, edition 2024)
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform
 
 ## Setup

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "HTTP client plugin for Tauri applications"
 license = "MIT"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.94.0"
 links = "tauri-plugin-http-client"
 exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 
