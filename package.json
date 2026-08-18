@@ -19,7 +19,7 @@
    ],
    "scripts": {
       "build": "rollup -c",
-      "check-node-version": "check-node-version --npm 11.8.0",
+      "check-node-version": "check-node-version --npm 11.17.0",
       "commitlint": "commitlint --from ${COMMITLINT_FROM:-HEAD~1}",
       "eslint": "eslint .",
       "markdownlint": "markdownlint-cli2",
