@@ -34,10 +34,17 @@ npm run tauri dev
 
 ### Android
 
+TLS on Android requires extra Gradle setup for `rustls-platform-verifier` (Maven artifact + lockfile version pin).
+Follow **Android TLS (required)** in the [plugin README](../../README.md#android-tls-required) **before** running the app.
+
 ```sh
 npx tauri android init
+# Edit src-tauri/gen/android/build.gradle.kts and app/build.gradle.kts per plugin README
 npx tauri android dev
 ```
+
+**Smoke test:** After Gradle changes, confirm logcat contains
+`rustls-platform-verifier initialized for Android`, then run a GET panel request to `https://httpbin.org/get` (allowlisted).
 
 ### iOS
 

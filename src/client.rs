@@ -341,6 +341,11 @@ impl HttpClientState {
    /// Intermediate retryable responses are fully read and discarded; the
    /// caller only sees the final attempt's response body.
    pub(crate) async fn execute(&self, req: FetchRequest) -> Result<ExecuteResult> {
+      #[cfg(target_os = "android")]
+      crate::android::ensure_tls_ready()
+         .await
+         .map_err(Error::Other)?;
+
       let method = parse_method(req.method.as_deref().unwrap_or("GET"))?;
       let body_bytes = match req.body {
          Some(ref b) => Some(decode_request_body(b, req.body_encoding.as_ref())?),
@@ -392,6 +397,11 @@ impl HttpClientState {
       timeout: Option<Duration>,
       max_retries: Option<u32>,
    ) -> Result<crate::response::Response> {
+      #[cfg(target_os = "android")]
+      crate::android::ensure_tls_ready()
+         .await
+         .map_err(Error::Other)?;
+
       let timeout = timeout.or(self.config.default_timeout);
       let max_retries = match max_retries {
          Some(n) => n.min(self.config.retry.max_retries),

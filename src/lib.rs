@@ -37,6 +37,10 @@ use tauri::{
 };
 
 pub mod allowlist;
+#[cfg(target_os = "android")]
+pub mod android;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod android_init_errors;
 pub mod client;
 mod commands;
 pub mod config;
@@ -56,11 +60,14 @@ use config::{HttpClientConfig, RetryConfig};
 /// ```no_run
 /// use std::time::Duration;
 ///
-/// let plugin = tauri_plugin_http_client::Builder::new()
-///    .allowed_domains(["api.example.com"])
-///    .default_timeout(Duration::from_secs(30))
-///    .max_redirects(5)
-///    .build();
+/// tauri::Builder::default()
+///    .plugin(
+///       tauri_plugin_http_client::Builder::new()
+///          .allowed_domains(["api.example.com"])
+///          .default_timeout(Duration::from_secs(30))
+///          .max_redirects(5)
+///          .build(),
+///    );
 /// ```
 pub struct Builder {
    allowed_domains: Vec<String>,
@@ -160,10 +167,13 @@ impl Builder {
    /// ```no_run
    /// use tauri_plugin_http_client::config::RetryConfig;
    ///
-   /// let plugin = tauri_plugin_http_client::Builder::new()
-   ///    .allowed_domains(["api.example.com"])
-   ///    .retry(RetryConfig::default())
-   ///    .build();
+   /// tauri::Builder::default()
+   ///    .plugin(
+   ///       tauri_plugin_http_client::Builder::new()
+   ///          .allowed_domains(["api.example.com"])
+   ///          .retry(RetryConfig::default())
+   ///          .build(),
+   ///    );
    /// ```
    pub fn retry(mut self, config: RetryConfig) -> Self {
       self.retry = Some(config);
@@ -213,6 +223,16 @@ impl Builder {
             ));
 
             let redirect_policy = build_redirect_policy(Arc::clone(&allowlist), max_redirects);
+
+            #[cfg(target_os = "android")]
+            {
+               android::init_platform_verifier_from_app_deferred(app)?;
+               let handle = app.clone();
+               android::register_tls_app_host(handle.clone());
+               tauri::async_runtime::spawn(async move {
+                  android::poll_platform_verifier_init(handle).await;
+               });
+            }
 
             let mut client_builder = reqwest::Client::builder().redirect(redirect_policy);
 

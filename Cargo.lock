@@ -3681,8 +3681,10 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "jni 0.22.4",
  "parking_lot",
  "reqwest",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tauri",
