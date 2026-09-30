@@ -372,6 +372,19 @@ Default headers are validated at plugin init; per-request
 headers are validated before each request. Blocked headers
 produce a `FORBIDDEN_HEADER` error.
 
+### TLS Certificates
+
+On Android, server certificates are verified against the
+Mozilla root store bundled with the plugin
+(`webpki-root-certs`), not the system trust store. No JNI
+or Gradle setup is needed, but user-installed and MDM CAs
+and `network_security_config` are not honored. Mozilla's
+domain limits do not apply: the TUBITAK root is not
+limited to `.tr`. The roots are fixed at build time. To
+get Mozilla root changes, run
+`cargo update -p webpki-root-certs` in the app, then
+rebuild. Other platforms use the system trust store.
+
 
 ## Rust Configuration
 

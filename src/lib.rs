@@ -220,6 +220,21 @@ impl Builder {
                client_builder = client_builder.user_agent(ua.clone());
             }
 
+            // On Android, reqwest's platform verifier panics at the first
+            // handshake without host-app JNI setup. Use the bundled Mozilla
+            // roots instead. Mozilla's domain limits do not apply to them:
+            // the TUBITAK root is not limited to `.tr`.
+            #[cfg(target_os = "android")]
+            {
+               let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                  .iter()
+                  .map(|cert| reqwest::Certificate::from_der(cert.as_ref()))
+                  .collect::<reqwest::Result<Vec<_>>>()
+                  .map_err(|e| e.to_string())?;
+
+               client_builder = client_builder.tls_certs_only(roots);
+            }
+
             let client = client_builder.build().map_err(|e| e.to_string())?;
 
             let config = HttpClientConfig {
