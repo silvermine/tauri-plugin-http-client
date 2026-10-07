@@ -24,26 +24,39 @@ cd examples/tauri-app
 npm install
 ```
 
+App icons live under `src-tauri/icons/` (regenerate with `npx tauri icon app-icon.png` from this directory).
+
 ## Running
 
 ### Desktop (macOS, Linux, Windows)
 
 ```sh
-npm run tauri dev
+npm run dev
 ```
 
 ### Android
 
+Use `@tauri-apps/cli` **2.12.0** (matches this repo). Tauri 2.12 generates Gradle **9.6.1**, AGP **9.3.1**, Kotlin **2.2**, and `targetSdk` **37**.
+
+Mobile dev needs Vite on the LAN; this example passes `--host` via `beforeDevCommand` in `tauri.conf.json` (same pattern as other Silvermine Tauri plugins). Vite listens on port **1420** — you should see a **Network** URL when the dev server starts.
+
+If you previously initialized Android with an older CLI, remove stale generated files before re-init:
+
 ```sh
+rm -rf src-tauri/gen/android
 npx tauri android init
-npx tauri android dev
+npm run tauri android dev
 ```
+
+If port 1420 is already in use, stop the other process or free the port (`strictPort` is enabled).
+
+If Gradle fails with a wrapper or Java version error, delete `src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties` and run `npx tauri android init` again. Use a JDK version compatible with Gradle 9.6.1 (the CLI warns when Java is too new).
 
 ### iOS
 
 ```sh
 npx tauri ios init
-npx tauri ios dev
+npm run tauri ios dev
 ```
 
 ## What It Demonstrates
