@@ -1,11 +1,12 @@
 {
+   "$schema": "https://schema.tauri.app/config/2",
    "productName": "HTTP Client Example",
    "version": "0.1.0",
    "identifier": "com.silvermine.httpClientExample",
    "build": {
-      "beforeDevCommand": "npm run dev",
+      "beforeDevCommand": "npm run vite -- --host",
       "beforeBuildCommand": "npm run build",
-      "devUrl": "http://localhost:5173",
+      "devUrl": "http://localhost:1420",
       "frontendDist": "../dist"
    },
    "app": {
