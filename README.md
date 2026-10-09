@@ -34,7 +34,7 @@ requests from Tauri applications.
 npm install @silvermine/tauri-plugin-http-client
 ```
 
-Peer dependency: `@tauri-apps/api >= 2.9.1`
+Peer dependency: `@tauri-apps/api >= 2.12.0`
 
 ### 2. Add the Cargo dependency
 

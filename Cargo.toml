@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-http-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "HTTP client plugin for Tauri applications"
 license = "MIT"
 edition = "2024"
@@ -15,7 +15,7 @@ parking_lot = "0.12.5"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "gzip", "brotli", "deflate", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.140"
-tauri = { version = "2.9.3" }
+tauri = { version = "2.12.0" }
 thiserror = "2.0.17"
 tokio = { version = "1.45.1", features = ["sync"] }
 tracing = { version = "0.1.41", default-features = false, features = ["std", "log", "release_max_level_warn"] }
@@ -29,4 +29,4 @@ tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "time"] }
 wiremock = "0.6.2"
 
 [build-dependencies]
-tauri-plugin = { version = "2.5.1", features = ["build"] }
+tauri-plugin = { version = "2.7.1", features = ["build"] }

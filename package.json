@@ -1,6 +1,6 @@
 {
    "name": "@silvermine/tauri-plugin-http-client",
-   "version": "0.1.0",
+   "version": "0.2.0",
    "description": "HTTP client plugin for Tauri applications",
    "type": "module",
    "types": "./dist-js/index.d.ts",
@@ -46,8 +46,8 @@
       "@silvermine/eslint-config": "github:silvermine/eslint-config-silvermine#3d0c92ca8d18c4bb66d7b01cf226b1963cbd1319",
       "@silvermine/standardization": "2.2.3",
       "@silvermine/typescript-config": "1.0.0",
-      "@tauri-apps/api": "2.9.1",
-      "@tauri-apps/cli": "2.9.5",
+      "@tauri-apps/api": "2.12.0",
+      "@tauri-apps/cli": "2.12.0",
       "eslint": "8.57.1",
       "jsdom": "26.1.0",
       "npm-run-all": "4.1.5",
@@ -57,6 +57,6 @@
       "vitest": "3.2.3"
    },
    "peerDependencies": {
-      "@tauri-apps/api": "^2.9.0"
+      "@tauri-apps/api": "^2.12.0"
    }
 }

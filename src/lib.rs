@@ -56,11 +56,13 @@ use config::{HttpClientConfig, RetryConfig};
 /// ```no_run
 /// use std::time::Duration;
 ///
-/// let plugin = tauri_plugin_http_client::Builder::new()
-///    .allowed_domains(["api.example.com"])
-///    .default_timeout(Duration::from_secs(30))
-///    .max_redirects(5)
-///    .build();
+/// tauri::Builder::default().plugin(
+///    tauri_plugin_http_client::Builder::new()
+///       .allowed_domains(["api.example.com"])
+///       .default_timeout(Duration::from_secs(30))
+///       .max_redirects(5)
+///       .build(),
+/// );
 /// ```
 pub struct Builder {
    allowed_domains: Vec<String>,
@@ -160,10 +162,12 @@ impl Builder {
    /// ```no_run
    /// use tauri_plugin_http_client::config::RetryConfig;
    ///
-   /// let plugin = tauri_plugin_http_client::Builder::new()
-   ///    .allowed_domains(["api.example.com"])
-   ///    .retry(RetryConfig::default())
-   ///    .build();
+   /// tauri::Builder::default().plugin(
+   ///    tauri_plugin_http_client::Builder::new()
+   ///       .allowed_domains(["api.example.com"])
+   ///       .retry(RetryConfig::default())
+   ///       .build(),
+   /// );
    /// ```
    pub fn retry(mut self, config: RetryConfig) -> Self {
       self.retry = Some(config);
