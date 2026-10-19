@@ -133,6 +133,11 @@ impl Serialize for Error {
 
 #[cfg(test)]
 mod tests {
+   use std::time::Duration;
+
+   use wiremock::matchers::method;
+   use wiremock::{Mock, MockServer, ResponseTemplate};
+
    use super::*;
 
    #[test]
@@ -159,6 +164,7 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "IP_ADDRESS_NOT_ALLOWED");
+      assert_eq!(json["message"], "ip addresses not allowed in urls");
    }
 
    #[test]
@@ -167,6 +173,7 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "INVALID_URL");
+      assert_eq!(json["message"], "invalid url: not a url");
    }
 
    #[test]
@@ -187,11 +194,9 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "RESPONSE_TOO_LARGE");
-      assert!(
-         json["message"]
-            .as_str()
-            .unwrap()
-            .contains("20000000 bytes exceeds limit of 10000000 bytes")
+      assert_eq!(
+         json["message"],
+         "response too large: 20000000 bytes exceeds limit of 10000000 bytes"
       );
    }
 
@@ -201,6 +206,7 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "REDIRECT_BLOCKED");
+      assert_eq!(json["message"], "redirect to disallowed domain: evil.com");
    }
 
    #[test]
@@ -209,6 +215,7 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "INVALID_URL");
+      assert_eq!(json["message"], "url must not contain userinfo");
    }
 
    #[test]
@@ -220,11 +227,9 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "ALLOWLIST_SIZE_EXCEEDED");
-      assert!(
-         json["message"]
-            .as_str()
-            .unwrap()
-            .contains("150 patterns exceeds limit of 128")
+      assert_eq!(
+         json["message"],
+         "allowlist size exceeded: 150 patterns exceeds limit of 128"
       );
    }
 
@@ -234,7 +239,10 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "WILDCARD_NOT_ALLOWED_AT_RUNTIME");
-      assert!(json["message"].as_str().unwrap().contains("*.evil.com"));
+      assert_eq!(
+         json["message"],
+         "wildcard patterns not allowed at runtime: *.evil.com"
+      );
    }
 
    #[test]
@@ -243,11 +251,9 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "INVALID_DOMAIN_PATTERN");
-      assert!(
-         json["message"]
-            .as_str()
-            .unwrap()
-            .contains("pattern contains invalid characters")
+      assert_eq!(
+         json["message"],
+         "invalid domain pattern: pattern contains invalid characters"
       );
    }
 
@@ -257,7 +263,7 @@ mod tests {
       let json = serde_json::to_value(&error).unwrap();
 
       assert_eq!(json["code"], "FORBIDDEN_HEADER");
-      assert!(json["message"].as_str().unwrap().contains("host"));
+      assert_eq!(json["message"], "forbidden header: host");
    }
 
    #[test]
@@ -300,5 +306,116 @@ mod tests {
          }
          .is_retryable()
       );
+   }
+
+   // --- Error::Request classification ---
+   //
+   // reqwest::Error has no public constructor, so each test provokes a real
+   // failure locally (no external network).
+
+   /// Request to a local port with nothing listening, yielding a connect error.
+   async fn connect_error() -> reqwest::Error {
+      // Bind to reserve a free port, then drop so nothing is listening
+      let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+      let port = listener.local_addr().unwrap().port();
+
+      drop(listener);
+
+      reqwest::Client::new()
+         .get(format!("http://127.0.0.1:{port}/"))
+         .send()
+         .await
+         .unwrap_err()
+   }
+
+   /// Request against a server that replies far slower than the client timeout.
+   async fn timeout_error() -> reqwest::Error {
+      let server = MockServer::start().await;
+
+      Mock::given(method("GET"))
+         .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+         .mount(&server)
+         .await;
+
+      reqwest::Client::builder()
+         .timeout(Duration::from_millis(50))
+         .build()
+         .unwrap()
+         .get(server.uri())
+         .send()
+         .await
+         .unwrap_err()
+   }
+
+   /// Request with an unparsable URL, yielding a builder error that is
+   /// neither a timeout nor a connect error.
+   async fn builder_error() -> reqwest::Error {
+      reqwest::Client::new()
+         .get("not a url")
+         .send()
+         .await
+         .unwrap_err()
+   }
+
+   #[tokio::test]
+   async fn test_error_request_timeout_code_and_retryable() {
+      let source = timeout_error().await;
+
+      assert!(source.is_timeout());
+
+      let error = Error::from(source);
+      let json = serde_json::to_value(&error).unwrap();
+
+      assert!(matches!(error, Error::Request(_)));
+      assert_eq!(json["code"], "TIMEOUT");
+      assert!(
+         json["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("request error:")
+      );
+      assert!(error.is_retryable());
+   }
+
+   #[tokio::test]
+   async fn test_error_request_connect_code_and_retryable() {
+      let source = connect_error().await;
+
+      assert!(source.is_connect());
+      assert!(!source.is_timeout());
+
+      let error = Error::from(source);
+      let json = serde_json::to_value(&error).unwrap();
+
+      assert!(matches!(error, Error::Request(_)));
+      assert_eq!(json["code"], "CONNECTION_ERROR");
+      assert!(
+         json["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("request error:")
+      );
+      assert!(error.is_retryable());
+   }
+
+   #[tokio::test]
+   async fn test_error_request_other_code_not_retryable() {
+      let source = builder_error().await;
+
+      assert!(!source.is_timeout());
+      assert!(!source.is_connect());
+
+      let error = Error::from(source);
+      let json = serde_json::to_value(&error).unwrap();
+
+      assert!(matches!(error, Error::Request(_)));
+      assert_eq!(json["code"], "REQUEST_ERROR");
+      assert!(
+         json["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("request error:")
+      );
+      assert!(!error.is_retryable());
    }
 }

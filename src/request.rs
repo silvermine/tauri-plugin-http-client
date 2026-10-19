@@ -169,7 +169,7 @@ mod tests {
       let state = test_state();
       let builder = state
          .post("https://example.com")
-         .body("text payload".as_bytes().to_vec());
+         .body(String::from("text payload"));
 
       assert_eq!(builder.body.as_deref(), Some(b"text payload".as_slice()));
    }

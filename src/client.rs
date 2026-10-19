@@ -775,8 +775,9 @@ impl HttpClientState {
    ///   (follow up to 10 hops) instead of [`build_redirect_policy`] — redirects
    ///   are not validated against the domain allowlist.
    /// - **No default header validation**: Default headers are not checked
-   ///   against the forbidden-header list at construction time (they are still
-   ///   validated per-request via [`merge_headers`]).
+   ///   against the forbidden-header list. In production that check happens only
+   ///   in the plugin builder's setup; [`merge_headers`] validates per-request
+   ///   headers only.
    /// - **No custom redirect limit**: Uses reqwest's default (10) instead of
    ///   `HttpClientConfig::max_redirects`.
    pub fn for_testing() -> Self {
@@ -981,6 +982,8 @@ impl std::error::Error for RedirectBlockedError {}
 
 #[cfg(test)]
 mod tests {
+   use std::io::{Read, Write};
+
    use super::*;
 
    /// Helper to build a `RawResponse` for tests that need to exercise
@@ -1178,12 +1181,14 @@ mod tests {
       assert!(!state.is_allowlist_empty());
    }
 
-   #[test]
-   fn test_in_flight_requests_default() {
-      let in_flight = InFlightRequests::default();
-      let in_flight2 = InFlightRequests::new();
+   #[tokio::test]
+   async fn test_in_flight_requests_default() {
+      let from_default = InFlightRequests::default();
+      let from_new = InFlightRequests::new();
 
-      assert!(!std::ptr::eq(&in_flight, &in_flight2));
+      // Both constructors start with no registered requests
+      assert!(from_default.0.read().await.is_empty());
+      assert!(from_new.0.read().await.is_empty());
    }
 
    // --- Wiremock-based integration tests ---
@@ -1428,62 +1433,85 @@ mod tests {
       assert_eq!(result.unwrap().len(), 100);
    }
 
-   #[tokio::test]
-   async fn test_content_length_exceeds_limit_early_reject() {
-      let server = MockServer::start().await;
-      let body = "x".repeat(2000);
+   /// Starts a raw HTTP/1.1 server on an ephemeral port that advertises
+   /// `Content-Length: advertised` but sends only a few body bytes and then
+   /// stalls, so only the early Content-Length check can reject the response.
+   /// Returns the port.
+   ///
+   /// wiremock cannot do this: hyper always writes a `Content-Length` that
+   /// matches the body it is given.
+   fn spawn_short_body_server(advertised: usize) -> u16 {
+      let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+      let port = listener.local_addr().unwrap().port();
 
-      Mock::given(method("GET"))
-         .and(path("/big"))
-         .respond_with(ResponseTemplate::new(200).set_body_string(&body))
-         .mount(&server)
-         .await;
+      std::thread::spawn(move || {
+         let (mut stream, _) = listener.accept().unwrap();
+         let mut buf = [0u8; 1024];
+
+         // Consume the request head before replying
+         let _ = stream.read(&mut buf);
+
+         let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {advertised}\r\n\r\nxxxxxxxxxx");
+
+         let _ = stream.write_all(head.as_bytes());
+         let _ = stream.flush();
+
+         // Keep the connection open so the client never sees an early EOF
+         std::thread::sleep(Duration::from_millis(500));
+      });
+
+      port
+   }
+
+   #[tokio::test]
+   async fn test_content_length_early_reject_uses_advertised_length() {
+      // Only 10 body bytes are ever sent, so a reported size of 1_000_000 can
+      // only come from the Content-Length check, not from the read loop
+      let port = spawn_short_body_server(1_000_000);
 
       let state = build_test_state(&["localhost"], 10, 100);
       let client = reqwest::Client::new();
       let resp = client
-         .get(format!("{}/big", server.uri()))
+         .get(format!("http://127.0.0.1:{port}/big"))
          .send()
          .await
          .unwrap();
       let result = state.read_body_with_limit(resp).await;
 
-      assert!(result.is_err());
-      let err = result.unwrap_err();
-
       assert!(
-         matches!(err, Error::ResponseTooLarge { .. }),
-         "expected ResponseTooLarge, got: {err:?}"
+         matches!(
+            result,
+            Err(Error::ResponseTooLarge {
+               size: 1_000_000,
+               limit: 100
+            })
+         ),
+         "expected early ResponseTooLarge, got: {result:?}"
       );
    }
 
    #[tokio::test]
    async fn test_chunked_body_exceeds_limit_aborts_midstream() {
-      let server = MockServer::start().await;
+      // 10 chunks of 50 bytes = 500 bytes total, against a 100 byte limit
+      let chunks = (0..10).map(|_| Ok::<_, std::io::Error>(vec![b'x'; 50]));
+      let body = reqwest::Body::wrap_stream(futures_util::stream::iter(chunks));
+      let resp = reqwest::Response::from(tauri::http::Response::new(body));
 
-      // wiremock sends the body; with a small limit, streaming read will abort
-      let body = "x".repeat(500);
-
-      Mock::given(method("GET"))
-         .and(path("/chunked"))
-         .respond_with(ResponseTemplate::new(200).set_body_string(&body))
-         .mount(&server)
-         .await;
+      // No Content-Length means the early check is skipped and the
+      // streaming limit check inside the read loop is what must fire
+      assert!(resp.content_length().is_none());
 
       let state = build_test_state(&["localhost"], 10, 100);
-      let client = reqwest::Client::new();
-      let resp = client
-         .get(format!("{}/chunked", server.uri()))
-         .send()
-         .await
-         .unwrap();
       let result = state.read_body_with_limit(resp).await;
 
-      assert!(result.is_err());
-      assert!(matches!(
-         result.unwrap_err(),
-         Error::ResponseTooLarge { .. }
-      ));
+      match result {
+         Err(Error::ResponseTooLarge { size, limit }) => {
+            assert_eq!(limit, 100);
+            // Aborted after the limit was crossed, before the whole body was read
+            assert!(size > 100 && size < 500, "unexpected size: {size}");
+         }
+         other => panic!("expected ResponseTooLarge, got: {other:?}"),
+      }
    }
 
    #[tokio::test]
@@ -1936,8 +1964,11 @@ mod tests {
 
       let backoff = calculate_backoff(&config, 1, None);
 
-      // Equal jitter: result should be between 0 and 200ms
-      assert!(backoff <= Duration::from_millis(200));
+      // Equal jitter: result is in [base/2, base) = [100ms, 200ms)
+      assert!(
+         (Duration::from_millis(100)..Duration::from_millis(200)).contains(&backoff),
+         "backoff = {backoff:?}"
+      );
    }
 
    #[test]
@@ -1950,12 +1981,23 @@ mod tests {
 
       // attempt=1: base=200ms, attempt=2: base=400ms, attempt=3: base=800ms
       let b1 = calculate_backoff(&config, 1, None);
+      let b2 = calculate_backoff(&config, 2, None);
       let b3 = calculate_backoff(&config, 3, None);
 
-      // b3 should have a higher ceiling (800ms) than b1 (200ms)
-      // Due to jitter, we can only check the ceiling
-      assert!(b1 <= Duration::from_millis(200));
-      assert!(b3 <= Duration::from_millis(800));
+      // Equal jitter keeps each result in [base/2, base). These windows
+      // are disjoint, so growth holds for any jitter value.
+      assert!(
+         (Duration::from_millis(100)..Duration::from_millis(200)).contains(&b1),
+         "b1 = {b1:?}"
+      );
+      assert!(
+         (Duration::from_millis(200)..Duration::from_millis(400)).contains(&b2),
+         "b2 = {b2:?}"
+      );
+      assert!(
+         (Duration::from_millis(400)..Duration::from_millis(800)).contains(&b3),
+         "b3 = {b3:?}"
+      );
    }
 
    #[test]
@@ -1969,7 +2011,10 @@ mod tests {
       // attempt=5: 1000 * 2^4 = 16000ms, capped to 2000ms
       let backoff = calculate_backoff(&config, 5, None);
 
-      assert!(backoff <= Duration::from_millis(2000));
+      assert!(
+         (Duration::from_millis(1000)..Duration::from_millis(2000)).contains(&backoff),
+         "backoff = {backoff:?}"
+      );
    }
 
    #[test]
@@ -2065,7 +2110,43 @@ mod tests {
       // Very high attempt number should not panic
       let backoff = calculate_backoff(&config, 100, None);
 
-      assert!(backoff <= Duration::from_secs(10));
+      // Capped at max_backoff (10s), so jitter window is [5s, 10s)
+      assert!(
+         (Duration::from_secs(5)..Duration::from_secs(10)).contains(&backoff),
+         "backoff = {backoff:?}"
+      );
+   }
+
+   #[test]
+   fn test_calculate_backoff_applies_jitter() {
+      // base = 1994ms, so half = 997ms (prime): `nanos % half` keeps varying
+      // even on clocks coarser than 1ns.
+      //
+      // Known gap this test does not cover: with the default 200ms backoff,
+      // half is 100ms, and `subsec_nanos() % 100` is always 0 on macOS/iOS
+      // (microsecond clock) and Windows (100ns clock), so no jitter is
+      // applied there.
+      let config = RetryConfig {
+         initial_backoff: Duration::from_millis(1994),
+         max_backoff: Duration::from_secs(60),
+         ..RetryConfig::default()
+      };
+      let mut seen = std::collections::HashSet::new();
+
+      for _ in 0..20 {
+         let backoff = calculate_backoff(&config, 1, None);
+
+         assert!(
+            (Duration::from_millis(997)..Duration::from_millis(1994)).contains(&backoff),
+            "backoff = {backoff:?}"
+         );
+
+         seen.insert(backoff);
+         std::thread::sleep(Duration::from_millis(1));
+      }
+
+      // A constant base/2 would pass the window check, so require variation
+      assert!(seen.len() > 1, "no jitter observed: {seen:?}");
    }
 
    #[tokio::test]
@@ -2628,7 +2709,7 @@ mod tests {
    }
 
    #[tokio::test]
-   async fn test_retry_revalidates_allowlist_between_attempts() {
+   async fn test_retry_succeeds_when_allowlist_unchanged_between_attempts() {
       let server = MockServer::start().await;
 
       // First call returns 500 (triggers retry), second would return 200
@@ -2645,11 +2726,9 @@ mod tests {
          .mount(&server)
          .await;
 
-      let allowlist = Arc::new(RwLock::new(
-         DomainAllowlist::new(vec!["localhost".to_string()]).unwrap(),
-      ));
+      // "localhost" is only a runtime pattern, as in the revoke test below
+      let allowlist = Arc::new(RwLock::new(DomainAllowlist::new(vec![]).unwrap()));
 
-      // Add a runtime domain that we'll remove to test revalidation
       allowlist
          .write()
          .add_patterns(vec!["localhost".to_string()])
@@ -2670,14 +2749,78 @@ mod tests {
       };
       let state = HttpClientState::new(client, allowlist, config);
 
-      // The request should succeed because "localhost" is an init_pattern
-      // (cannot be removed). This test verifies the revalidation path runs
-      // without error when the allowlist hasn't changed.
+      // Positive control for the revoke test: revalidation on retry passes
+      // while the runtime pattern stays in place
       let req = make_request(&localhost_url(&server, "/api"));
       let resp = state.execute(req).await.unwrap();
 
       assert_eq!(resp.metadata.status, 200);
       assert_eq!(resp.metadata.retry_count, 1);
+   }
+
+   /// wiremock responder that removes a runtime domain from the allowlist
+   /// before answering 500, simulating a revocation that lands mid-retry.
+   struct RevokeThenFail {
+      allowlist: Arc<RwLock<DomainAllowlist>>,
+   }
+
+   impl wiremock::Respond for RevokeThenFail {
+      fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+         self
+            .allowlist
+            .write()
+            .remove_patterns(&["localhost".to_string()])
+            .unwrap();
+
+         ResponseTemplate::new(500).set_body_string("error")
+      }
+   }
+
+   #[tokio::test]
+   async fn test_retry_revalidates_allowlist_between_attempts() {
+      let server = MockServer::start().await;
+
+      // "localhost" is only a runtime pattern here, so it can be revoked
+      let allowlist = Arc::new(RwLock::new(DomainAllowlist::new(vec![]).unwrap()));
+
+      allowlist
+         .write()
+         .add_patterns(vec!["localhost".to_string()])
+         .unwrap();
+
+      // First attempt revokes the domain and returns 500 (triggers retry)
+      Mock::given(method("GET"))
+         .and(path("/api"))
+         .respond_with(RevokeThenFail {
+            allowlist: Arc::clone(&allowlist),
+         })
+         .expect(1) // Retry must be rejected before reaching the server
+         .mount(&server)
+         .await;
+
+      let policy = build_redirect_policy_inner(Arc::clone(&allowlist), 10, true);
+      let client = reqwest::Client::builder().redirect(policy).build().unwrap();
+      let config = HttpClientConfig {
+         retry: RetryConfig {
+            max_retries: 2,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(10),
+            retryable_methods: None,
+            ..RetryConfig::default()
+         },
+         allow_private_ip: true,
+         ..Default::default()
+      };
+      let state = HttpClientState::new(client, allowlist, config);
+
+      let req = make_request(&localhost_url(&server, "/api"));
+      let result = state.execute(req).await;
+
+      // The retry must be rejected by revalidation
+      assert!(
+         matches!(result, Err(Error::DomainNotAllowed(ref d)) if d == "localhost"),
+         "expected DomainNotAllowed, got: {result:?}"
+      );
    }
 
    // --- Redirect to IP address (integration) ---
@@ -2837,7 +2980,20 @@ mod tests {
 
    #[tokio::test]
    async fn test_security_error_not_retried() {
-      // DomainNotAllowed should fail immediately, not be retried
+      let server = MockServer::start().await;
+
+      // The redirect target is not allowlisted, so the attempt itself fails
+      // with RedirectBlocked. Retries are enabled, but that error is not
+      // retryable, so the endpoint must be hit exactly once.
+      Mock::given(method("GET"))
+         .and(path("/redirect"))
+         .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", "https://evil.example.com/steal"),
+         )
+         .expect(1)
+         .mount(&server)
+         .await;
+
       let state = build_localhost_test_state_with_config(HttpClientConfig {
          retry: RetryConfig {
             max_retries: 3,
@@ -2849,13 +3005,13 @@ mod tests {
          ..Default::default()
       });
 
-      let req = make_request("https://evil.com/steal");
+      let req = make_request(&localhost_url(&server, "/redirect"));
       let result = state.execute(req).await;
 
-      assert!(result.is_err());
-      assert!(matches!(result.unwrap_err(), Error::DomainNotAllowed(_)));
-      // If it were retried, this test would take noticeable time due to backoff.
-      // The near-instant completion proves the retry loop was bypassed.
+      assert!(
+         matches!(result, Err(Error::RedirectBlocked(_))),
+         "got: {result:?}"
+      );
    }
 
    #[tokio::test]
@@ -3036,17 +3192,17 @@ mod tests {
       let defaults = HashMap::new();
       let result = merge_headers(&defaults, vec![("host", "evil.com")].into_iter());
 
-      assert!(result.is_err());
+      assert!(matches!(result, Err(Error::ForbiddenHeader(ref h)) if h == "host"));
    }
 
    #[test]
    fn test_merge_headers_defaults_not_validated_against_forbidden() {
       // Default headers are validated at plugin init, not in merge_headers.
       // merge_headers only validates per-request headers.
-      let defaults = HashMap::from([("x-custom".to_string(), "value".to_string())]);
+      let defaults = HashMap::from([("host".to_string(), "internal.example".to_string())]);
       let map = merge_headers(&defaults, std::iter::empty()).unwrap();
 
-      assert_eq!(map.get("x-custom").unwrap(), "value");
+      assert_eq!(map.get("host").unwrap(), "internal.example");
    }
 
    #[test]
