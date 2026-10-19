@@ -936,7 +936,9 @@ fn build_redirect_policy_inner(
    allow_private_ip: bool,
 ) -> redirect::Policy {
    redirect::Policy::custom(move |attempt| {
-      if attempt.previous().len() >= max_redirects {
+      // previous() starts with the original request URL, so it holds one more
+      // entry than the number of redirects followed so far.
+      if attempt.previous().len() > max_redirects {
          // stop() returns the last redirect response as a non-error result,
          // so the caller sees a 3xx status rather than a reqwest error.
          return attempt.stop();
@@ -1350,12 +1352,51 @@ mod tests {
       let req = make_request(&localhost_url(&server, "/hop0"));
       let resp = state.execute(req).await.unwrap();
 
-      // With max_redirects=3, the 4th redirect is stopped and the 3xx is returned
+      // With max_redirects=3, the 4th redirect is stopped and /hop3's 302 is
+      // returned. The status alone cannot tell /hop2 from /hop3, the URL can.
+      assert_eq!(resp.metadata.status, 302);
       assert!(
-         resp.metadata.status >= 300 && resp.metadata.status < 400,
-         "should return redirect status when max hops exceeded, got: {}",
-         resp.metadata.status
+         resp.metadata.url.ends_with("/hop3"),
+         "got {}",
+         resp.metadata.url
       );
+      assert!(resp.metadata.redirected);
+   }
+
+   #[tokio::test]
+   async fn test_redirect_chain_equal_to_max_hops_is_followed() {
+      let server = MockServer::start().await;
+
+      // Create a chain of exactly 3 redirects (max is 3)
+      for i in 0..3 {
+         Mock::given(method("GET"))
+            .and(path(format!("/hop{i}")))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+               "Location",
+               localhost_url(&server, &format!("/hop{}", i + 1)),
+            ))
+            .mount(&server)
+            .await;
+      }
+
+      Mock::given(method("GET"))
+         .and(path("/hop3"))
+         .respond_with(ResponseTemplate::new(200).set_body_string("final"))
+         .mount(&server)
+         .await;
+
+      let state = build_localhost_test_state(3, 10_000_000);
+      let req = make_request(&localhost_url(&server, "/hop0"));
+      let resp = state.execute(req).await.unwrap();
+
+      // max_redirects=3 allows 3 redirects, so the chain reaches the final 200
+      assert_eq!(resp.metadata.status, 200);
+      assert!(
+         resp.metadata.url.ends_with("/hop3"),
+         "got {}",
+         resp.metadata.url
+      );
+      assert!(resp.metadata.redirected);
    }
 
    #[tokio::test]
@@ -1402,7 +1443,12 @@ mod tests {
       let resp = state.execute(req).await.unwrap();
 
       // With max_redirects=0, the redirect is not followed
-      assert!(resp.metadata.status >= 300 && resp.metadata.status < 400);
+      assert_eq!(resp.metadata.status, 302);
+      assert!(
+         resp.metadata.url.ends_with("/start"),
+         "got {}",
+         resp.metadata.url
+      );
       assert!(!resp.metadata.redirected);
    }
 
@@ -2869,7 +2915,7 @@ mod tests {
          .mount(&server)
          .await;
 
-      // /c would redirect again, but max_redirects=2 should stop at /b's response
+      // /c would redirect again, but max_redirects=2 stops the chain there
       Mock::given(method("GET"))
          .and(path("/c"))
          .respond_with(
@@ -2883,10 +2929,10 @@ mod tests {
       let req = make_request(&localhost_url(&server, "/a"));
       let resp = state.execute(req).await.unwrap();
 
-      // Should get the 3xx response (stop behavior), not an error
-      assert!(
-         resp.metadata.status >= 300 && resp.metadata.status < 400,
-         "expected 3xx status from stop(), got {}",
+      // Should get /c's 301 (stop behavior), not an error or /b's 302
+      assert_eq!(
+         resp.metadata.status, 301,
+         "expected /c's 301 from stop(), got {}",
          resp.metadata.status
       );
       assert!(resp.metadata.redirected);
