@@ -119,6 +119,7 @@ impl<'a> RequestBuilder<'a> {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
    fn test_state() -> HttpClientState {
       HttpClientState::for_testing()
@@ -184,20 +185,14 @@ mod tests {
       assert_eq!(builder.timeout, Some(Duration::from_secs(5)));
    }
 
-   #[test]
-   fn test_max_retries_set() {
+   #[rstest]
+   #[case::custom_count(3)]
+   #[case::zero_disables(0)]
+   fn test_max_retries_stores_value(#[case] retries: u32) {
       let state = test_state();
-      let builder = state.get("https://example.com").max_retries(3);
+      let builder = state.get("https://example.com").max_retries(retries);
 
-      assert_eq!(builder.max_retries, Some(3));
-   }
-
-   #[test]
-   fn test_max_retries_zero_disables() {
-      let state = test_state();
-      let builder = state.get("https://example.com").max_retries(0);
-
-      assert_eq!(builder.max_retries, Some(0));
+      assert_eq!(builder.max_retries, Some(retries));
    }
 
    #[test]

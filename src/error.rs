@@ -139,173 +139,111 @@ mod tests {
    use wiremock::{Mock, MockServer, ResponseTemplate};
 
    use super::*;
+   use rstest::rstest;
 
-   #[test]
-   fn test_error_serialization_domain_not_allowed() {
-      let error = Error::DomainNotAllowed("evil.com".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "DOMAIN_NOT_ALLOWED");
-      assert_eq!(json["message"], "domain not allowed: evil.com");
-   }
-
-   #[test]
-   fn test_error_serialization_scheme_not_allowed() {
-      let error = Error::SchemeNotAllowed("ftp".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "SCHEME_NOT_ALLOWED");
-      assert_eq!(json["message"], "url scheme not allowed: ftp");
-   }
-
-   #[test]
-   fn test_error_serialization_ip_address_not_allowed() {
-      let error = Error::IpAddressNotAllowed;
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "IP_ADDRESS_NOT_ALLOWED");
-      assert_eq!(json["message"], "ip addresses not allowed in urls");
-   }
-
-   #[test]
-   fn test_error_serialization_invalid_url() {
-      let error = Error::InvalidUrl("not a url".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "INVALID_URL");
-      assert_eq!(json["message"], "invalid url: not a url");
-   }
-
-   #[test]
-   fn test_error_serialization_aborted() {
-      let error = Error::Aborted;
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "ABORTED");
-      assert_eq!(json["message"], "request aborted");
-   }
-
-   #[test]
-   fn test_error_serialization_response_too_large() {
-      let error = Error::ResponseTooLarge {
+   #[rstest]
+   #[case::domain_not_allowed(
+      Error::DomainNotAllowed("evil.com".to_string()),
+      "DOMAIN_NOT_ALLOWED",
+      "domain not allowed: evil.com"
+   )]
+   #[case::scheme_not_allowed(
+      Error::SchemeNotAllowed("ftp".to_string()),
+      "SCHEME_NOT_ALLOWED",
+      "url scheme not allowed: ftp"
+   )]
+   #[case::ip_address_not_allowed(
+      Error::IpAddressNotAllowed,
+      "IP_ADDRESS_NOT_ALLOWED",
+      "ip addresses not allowed in urls"
+   )]
+   #[case::invalid_url(
+      Error::InvalidUrl("not a url".to_string()),
+      "INVALID_URL",
+      "invalid url: not a url"
+   )]
+   #[case::aborted(Error::Aborted, "ABORTED", "request aborted")]
+   #[case::response_too_large(
+      Error::ResponseTooLarge {
          size: 20_000_000,
          limit: 10_000_000,
-      };
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "RESPONSE_TOO_LARGE");
-      assert_eq!(
-         json["message"],
-         "response too large: 20000000 bytes exceeds limit of 10000000 bytes"
-      );
-   }
-
-   #[test]
-   fn test_error_serialization_redirect_blocked() {
-      let error = Error::RedirectBlocked("evil.com".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "REDIRECT_BLOCKED");
-      assert_eq!(json["message"], "redirect to disallowed domain: evil.com");
-   }
-
-   #[test]
-   fn test_error_serialization_userinfo_not_allowed() {
-      let error = Error::UserinfoNotAllowed;
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "INVALID_URL");
-      assert_eq!(json["message"], "url must not contain userinfo");
-   }
-
-   #[test]
-   fn test_error_serialization_allowlist_size_exceeded() {
-      let error = Error::AllowlistSizeExceeded {
+      },
+      "RESPONSE_TOO_LARGE",
+      "response too large: 20000000 bytes exceeds limit of 10000000 bytes"
+   )]
+   #[case::redirect_blocked(
+      Error::RedirectBlocked("evil.com".to_string()),
+      "REDIRECT_BLOCKED",
+      "redirect to disallowed domain: evil.com"
+   )]
+   #[case::userinfo_not_allowed(
+      Error::UserinfoNotAllowed,
+      "INVALID_URL",
+      "url must not contain userinfo"
+   )]
+   #[case::allowlist_size_exceeded(
+      Error::AllowlistSizeExceeded {
          count: 150,
          limit: 128,
-      };
+      },
+      "ALLOWLIST_SIZE_EXCEEDED",
+      "allowlist size exceeded: 150 patterns exceeds limit of 128"
+   )]
+   #[case::wildcard_not_allowed_at_runtime(
+      Error::WildcardNotAllowedAtRuntime("*.evil.com".to_string()),
+      "WILDCARD_NOT_ALLOWED_AT_RUNTIME",
+      "wildcard patterns not allowed at runtime: *.evil.com"
+   )]
+   #[case::invalid_domain_pattern(
+      Error::InvalidDomainPattern("pattern contains invalid characters".to_string()),
+      "INVALID_DOMAIN_PATTERN",
+      "invalid domain pattern: pattern contains invalid characters"
+   )]
+   #[case::forbidden_header(
+      Error::ForbiddenHeader("host".to_string()),
+      "FORBIDDEN_HEADER",
+      "forbidden header: host"
+   )]
+   #[case::other(
+      Error::Other("something went wrong".to_string()),
+      "ERROR",
+      "something went wrong"
+   )]
+   fn test_error_serialization_code_and_message(
+      #[case] error: Error,
+      #[case] code: &str,
+      #[case] message: &str,
+   ) {
       let json = serde_json::to_value(&error).unwrap();
 
-      assert_eq!(json["code"], "ALLOWLIST_SIZE_EXCEEDED");
-      assert_eq!(
-         json["message"],
-         "allowlist size exceeded: 150 patterns exceeds limit of 128"
-      );
+      assert_eq!(json["code"], code);
+      assert_eq!(json["message"], message);
    }
 
-   #[test]
-   fn test_error_serialization_wildcard_not_allowed_at_runtime() {
-      let error = Error::WildcardNotAllowedAtRuntime("*.evil.com".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "WILDCARD_NOT_ALLOWED_AT_RUNTIME");
-      assert_eq!(
-         json["message"],
-         "wildcard patterns not allowed at runtime: *.evil.com"
-      );
-   }
-
-   #[test]
-   fn test_error_serialization_invalid_domain_pattern() {
-      let error = Error::InvalidDomainPattern("pattern contains invalid characters".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "INVALID_DOMAIN_PATTERN");
-      assert_eq!(
-         json["message"],
-         "invalid domain pattern: pattern contains invalid characters"
-      );
-   }
-
-   #[test]
-   fn test_error_serialization_forbidden_header() {
-      let error = Error::ForbiddenHeader("host".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "FORBIDDEN_HEADER");
-      assert_eq!(json["message"], "forbidden header: host");
-   }
-
-   #[test]
-   fn test_error_serialization_other() {
-      let error = Error::Other("something went wrong".to_string());
-      let json = serde_json::to_value(&error).unwrap();
-
-      assert_eq!(json["code"], "ERROR");
-      assert_eq!(json["message"], "something went wrong");
-   }
-
-   #[test]
-   fn test_is_retryable_security_errors_never_retryable() {
-      assert!(!Error::DomainNotAllowed("evil.com".to_string()).is_retryable());
-      assert!(!Error::SchemeNotAllowed("ftp".to_string()).is_retryable());
-      assert!(!Error::IpAddressNotAllowed.is_retryable());
-      assert!(!Error::InvalidUrl("bad".to_string()).is_retryable());
-      assert!(!Error::Aborted.is_retryable());
-      assert!(!Error::RedirectBlocked("evil.com".to_string()).is_retryable());
-      assert!(!Error::UserinfoNotAllowed.is_retryable());
-      assert!(
-         !Error::AllowlistSizeExceeded {
-            count: 200,
-            limit: 128
-         }
-         .is_retryable()
-      );
-      assert!(!Error::WildcardNotAllowedAtRuntime("*.evil.com".to_string()).is_retryable());
-      assert!(!Error::InvalidDomainPattern("bad".to_string()).is_retryable());
-      assert!(!Error::ForbiddenHeader("host".to_string()).is_retryable());
-      assert!(!Error::Other("fail".to_string()).is_retryable());
-   }
-
-   #[test]
-   fn test_is_retryable_response_too_large_not_retryable() {
-      assert!(
-         !Error::ResponseTooLarge {
-            size: 20_000_000,
-            limit: 10_000_000
-         }
-         .is_retryable()
-      );
+   #[rstest]
+   #[case::domain_not_allowed(Error::DomainNotAllowed("evil.com".to_string()))]
+   #[case::scheme_not_allowed(Error::SchemeNotAllowed("ftp".to_string()))]
+   #[case::ip_address_not_allowed(Error::IpAddressNotAllowed)]
+   #[case::invalid_url(Error::InvalidUrl("bad".to_string()))]
+   #[case::aborted(Error::Aborted)]
+   #[case::redirect_blocked(Error::RedirectBlocked("evil.com".to_string()))]
+   #[case::userinfo_not_allowed(Error::UserinfoNotAllowed)]
+   #[case::allowlist_size_exceeded(Error::AllowlistSizeExceeded {
+      count: 200,
+      limit: 128,
+   })]
+   #[case::wildcard_not_allowed_at_runtime(Error::WildcardNotAllowedAtRuntime(
+      "*.evil.com".to_string()
+   ))]
+   #[case::invalid_domain_pattern(Error::InvalidDomainPattern("bad".to_string()))]
+   #[case::forbidden_header(Error::ForbiddenHeader("host".to_string()))]
+   #[case::other(Error::Other("fail".to_string()))]
+   #[case::response_too_large(Error::ResponseTooLarge {
+      size: 20_000_000,
+      limit: 10_000_000,
+   })]
+   fn test_is_retryable_non_request_errors_never_retryable(#[case] error: Error) {
+      assert!(!error.is_retryable());
    }
 
    // --- Error::Request classification ---

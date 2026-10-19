@@ -987,6 +987,7 @@ mod tests {
    use std::io::{Read, Write};
 
    use super::*;
+   use rstest::rstest;
 
    /// Helper to build a `RawResponse` for tests that need to exercise
    /// `calculate_backoff` and `parse_retry_after_from_response`.
@@ -1000,28 +1001,32 @@ mod tests {
       }
    }
 
+   #[rstest]
+   #[case::get_upper("GET", reqwest::Method::GET)]
+   #[case::post_lower("post", reqwest::Method::POST)]
+   #[case::put_title_case("Put", reqwest::Method::PUT)]
+   #[case::delete_upper("DELETE", reqwest::Method::DELETE)]
+   #[case::patch_upper("PATCH", reqwest::Method::PATCH)]
+   #[case::head_upper("HEAD", reqwest::Method::HEAD)]
+   #[case::options_upper("OPTIONS", reqwest::Method::OPTIONS)]
+   #[case::get_lower("get", reqwest::Method::GET)]
+   #[case::get_title_case("Get", reqwest::Method::GET)]
+   #[case::get_mixed_case("gEt", reqwest::Method::GET)]
+   fn test_parse_method_valid(#[case] input: &str, #[case] expected: reqwest::Method) {
+      assert_eq!(parse_method(input).unwrap(), expected);
+   }
+
    #[test]
-   fn test_parse_method() {
-      assert_eq!(parse_method("GET").unwrap(), reqwest::Method::GET);
-      assert_eq!(parse_method("post").unwrap(), reqwest::Method::POST);
-      assert_eq!(parse_method("Put").unwrap(), reqwest::Method::PUT);
-      assert_eq!(parse_method("DELETE").unwrap(), reqwest::Method::DELETE);
-      assert_eq!(parse_method("PATCH").unwrap(), reqwest::Method::PATCH);
-      assert_eq!(parse_method("HEAD").unwrap(), reqwest::Method::HEAD);
-      assert_eq!(parse_method("OPTIONS").unwrap(), reqwest::Method::OPTIONS);
+   fn test_parse_method_invalid_is_error() {
       assert!(parse_method("INVALID").is_err());
    }
 
-   #[test]
-   fn test_decode_request_body_utf8() {
-      let body = decode_request_body("hello", Some(&BodyEncoding::Utf8)).unwrap();
-
-      assert_eq!(body, b"hello");
-   }
-
-   #[test]
-   fn test_decode_request_body_base64() {
-      let body = decode_request_body("aGVsbG8=", Some(&BodyEncoding::Base64)).unwrap();
+   #[rstest]
+   #[case::utf8("hello", Some(BodyEncoding::Utf8))]
+   #[case::base64("aGVsbG8=", Some(BodyEncoding::Base64))]
+   #[case::default_encoding("hello", None)]
+   fn test_decode_request_body_ok(#[case] input: &str, #[case] encoding: Option<BodyEncoding>) {
+      let body = decode_request_body(input, encoding.as_ref()).unwrap();
 
       assert_eq!(body, b"hello");
    }
@@ -1029,20 +1034,6 @@ mod tests {
    #[test]
    fn test_decode_request_body_invalid_base64() {
       assert!(decode_request_body("not valid base64!!!", Some(&BodyEncoding::Base64)).is_err());
-   }
-
-   #[test]
-   fn test_decode_request_body_default_encoding() {
-      let body = decode_request_body("hello", None).unwrap();
-
-      assert_eq!(body, b"hello");
-   }
-
-   #[test]
-   fn test_parse_method_case_insensitive() {
-      assert_eq!(parse_method("get").unwrap(), reqwest::Method::GET);
-      assert_eq!(parse_method("Get").unwrap(), reqwest::Method::GET);
-      assert_eq!(parse_method("gEt").unwrap(), reqwest::Method::GET);
    }
 
    #[test]
@@ -1326,12 +1317,26 @@ mod tests {
       );
    }
 
+   #[rstest]
+   // With max_redirects=0, the redirect is not followed
+   #[case::zero_max_stops_at_first_hop(1, 0, 302, "/hop0", false)]
+   // max_redirects=3 allows 3 redirects, so the chain reaches the final 200
+   #[case::chain_equal_to_max(3, 3, 200, "/hop3", true)]
+   // With max_redirects=3, the 4th redirect is stopped and /hop3's 302 is
+   // returned. The status alone cannot tell /hop2 from /hop3, the URL can.
+   #[case::chain_one_over_max(4, 3, 302, "/hop3", true)]
    #[tokio::test]
-   async fn test_redirect_chain_exceeds_max_hops() {
+   async fn test_redirect_chain_against_max_redirects(
+      #[case] hops: usize,
+      #[case] max_redirects: usize,
+      #[case] status: u16,
+      #[case] final_path: &str,
+      #[case] redirected: bool,
+   ) {
       let server = MockServer::start().await;
 
-      // Create a chain of 4 redirects (max is 3)
-      for i in 0..4 {
+      // Each /hop{i} redirects to /hop{i+1}; the last one answers 200
+      for i in 0..hops {
          Mock::given(method("GET"))
             .and(path(format!("/hop{i}")))
             .respond_with(ResponseTemplate::new(302).insert_header(
@@ -1343,60 +1348,22 @@ mod tests {
       }
 
       Mock::given(method("GET"))
-         .and(path("/hop4"))
+         .and(path(format!("/hop{hops}")))
          .respond_with(ResponseTemplate::new(200).set_body_string("final"))
          .mount(&server)
          .await;
 
-      let state = build_localhost_test_state(3, 10_000_000);
+      let state = build_localhost_test_state(max_redirects, 10_000_000);
       let req = make_request(&localhost_url(&server, "/hop0"));
       let resp = state.execute(req).await.unwrap();
 
-      // With max_redirects=3, the 4th redirect is stopped and /hop3's 302 is
-      // returned. The status alone cannot tell /hop2 from /hop3, the URL can.
-      assert_eq!(resp.metadata.status, 302);
+      assert_eq!(resp.metadata.status, status);
       assert!(
-         resp.metadata.url.ends_with("/hop3"),
+         resp.metadata.url.ends_with(final_path),
          "got {}",
          resp.metadata.url
       );
-      assert!(resp.metadata.redirected);
-   }
-
-   #[tokio::test]
-   async fn test_redirect_chain_equal_to_max_hops_is_followed() {
-      let server = MockServer::start().await;
-
-      // Create a chain of exactly 3 redirects (max is 3)
-      for i in 0..3 {
-         Mock::given(method("GET"))
-            .and(path(format!("/hop{i}")))
-            .respond_with(ResponseTemplate::new(302).insert_header(
-               "Location",
-               localhost_url(&server, &format!("/hop{}", i + 1)),
-            ))
-            .mount(&server)
-            .await;
-      }
-
-      Mock::given(method("GET"))
-         .and(path("/hop3"))
-         .respond_with(ResponseTemplate::new(200).set_body_string("final"))
-         .mount(&server)
-         .await;
-
-      let state = build_localhost_test_state(3, 10_000_000);
-      let req = make_request(&localhost_url(&server, "/hop0"));
-      let resp = state.execute(req).await.unwrap();
-
-      // max_redirects=3 allows 3 redirects, so the chain reaches the final 200
-      assert_eq!(resp.metadata.status, 200);
-      assert!(
-         resp.metadata.url.ends_with("/hop3"),
-         "got {}",
-         resp.metadata.url
-      );
-      assert!(resp.metadata.redirected);
+      assert_eq!(resp.metadata.redirected, redirected);
    }
 
    #[tokio::test]
@@ -1426,57 +1393,35 @@ mod tests {
       assert!(resp.metadata.redirected);
    }
 
-   #[tokio::test]
-   async fn test_zero_max_redirects_blocks_all() {
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(path("/start"))
-         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", localhost_url(&server, "/end")),
-         )
-         .mount(&server)
-         .await;
-
-      let state = build_localhost_test_state(0, 10_000_000);
-      let req = make_request(&localhost_url(&server, "/start"));
-      let resp = state.execute(req).await.unwrap();
-
-      // With max_redirects=0, the redirect is not followed
-      assert_eq!(resp.metadata.status, 302);
-      assert!(
-         resp.metadata.url.ends_with("/start"),
-         "got {}",
-         resp.metadata.url
-      );
-      assert!(!resp.metadata.redirected);
-   }
-
    // --- Body size limit tests ---
 
+   #[rstest]
+   #[case::within_limit(100, 1000)]
+   #[case::exactly_at_limit(100, 100)]
+   #[case::empty_body(0, 100)]
    #[tokio::test]
-   async fn test_body_within_limit_succeeds() {
+   async fn test_read_body_with_limit_succeeds(#[case] body_len: usize, #[case] limit: usize) {
       let server = MockServer::start().await;
-      let body = "x".repeat(100);
+      let body = "x".repeat(body_len);
 
       Mock::given(method("GET"))
-         .and(path("/small"))
+         .and(path("/body"))
          .respond_with(ResponseTemplate::new(200).set_body_string(&body))
          .mount(&server)
          .await;
 
-      // Use 1000 byte limit, bypass allowlist by constructing state carefully
-      let state = build_test_state(&["localhost"], 10, 1000);
+      // Bypass allowlist by constructing state carefully
+      let state = build_test_state(&["localhost"], 10, limit);
       let client = reqwest::Client::new();
       let resp = client
-         .get(format!("{}/small", server.uri()))
+         .get(format!("{}/body", server.uri()))
          .send()
          .await
          .unwrap();
       let result = state.read_body_with_limit(resp).await;
 
       assert!(result.is_ok());
-      assert_eq!(result.unwrap().len(), 100);
+      assert_eq!(result.unwrap().len(), body_len);
    }
 
    /// Starts a raw HTTP/1.1 server on an ephemeral port that advertises
@@ -1558,53 +1503,6 @@ mod tests {
          }
          other => panic!("expected ResponseTooLarge, got: {other:?}"),
       }
-   }
-
-   #[tokio::test]
-   async fn test_body_exactly_at_limit_succeeds() {
-      let server = MockServer::start().await;
-      let body = "x".repeat(100);
-
-      Mock::given(method("GET"))
-         .and(path("/exact"))
-         .respond_with(ResponseTemplate::new(200).set_body_string(&body))
-         .mount(&server)
-         .await;
-
-      let state = build_test_state(&["localhost"], 10, 100);
-      let client = reqwest::Client::new();
-      let resp = client
-         .get(format!("{}/exact", server.uri()))
-         .send()
-         .await
-         .unwrap();
-      let result = state.read_body_with_limit(resp).await;
-
-      assert!(result.is_ok());
-      assert_eq!(result.unwrap().len(), 100);
-   }
-
-   #[tokio::test]
-   async fn test_empty_body_succeeds() {
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(path("/empty"))
-         .respond_with(ResponseTemplate::new(200))
-         .mount(&server)
-         .await;
-
-      let state = build_test_state(&["localhost"], 10, 100);
-      let client = reqwest::Client::new();
-      let resp = client
-         .get(format!("{}/empty", server.uri()))
-         .send()
-         .await
-         .unwrap();
-      let result = state.read_body_with_limit(resp).await;
-
-      assert!(result.is_ok());
-      assert!(result.unwrap().is_empty());
    }
 
    // --- HEAD request tests ---
@@ -1925,66 +1823,28 @@ mod tests {
 
    // --- Retry logic tests ---
 
-   #[test]
-   fn test_resolve_max_retries_uses_config_default() {
+   #[rstest]
+   #[case::uses_config_default(3, None, 3)]
+   #[case::per_request_override(5, Some(2), 2)]
+   #[case::per_request_capped_at_config(3, Some(10), 3)]
+   #[case::per_request_zero_disables(3, Some(0), 0)]
+   fn test_resolve_max_retries(
+      #[case] config_max_retries: u32,
+      #[case] per_request: Option<u32>,
+      #[case] expected: u32,
+   ) {
       let state = build_test_state_with_retry(
          &["example.com"],
          RetryConfig {
-            max_retries: 3,
-            ..RetryConfig::default()
-         },
-      );
-      let req = make_request("https://example.com");
-
-      assert_eq!(state.resolve_max_retries(&req), 3);
-   }
-
-   #[test]
-   fn test_resolve_max_retries_per_request_override() {
-      let state = build_test_state_with_retry(
-         &["example.com"],
-         RetryConfig {
-            max_retries: 5,
+            max_retries: config_max_retries,
             ..RetryConfig::default()
          },
       );
       let mut req = make_request("https://example.com");
 
-      req.max_retries = Some(2);
+      req.max_retries = per_request;
 
-      assert_eq!(state.resolve_max_retries(&req), 2);
-   }
-
-   #[test]
-   fn test_resolve_max_retries_per_request_capped_at_config() {
-      let state = build_test_state_with_retry(
-         &["example.com"],
-         RetryConfig {
-            max_retries: 3,
-            ..RetryConfig::default()
-         },
-      );
-      let mut req = make_request("https://example.com");
-
-      req.max_retries = Some(10);
-
-      assert_eq!(state.resolve_max_retries(&req), 3);
-   }
-
-   #[test]
-   fn test_resolve_max_retries_per_request_zero_disables() {
-      let state = build_test_state_with_retry(
-         &["example.com"],
-         RetryConfig {
-            max_retries: 3,
-            ..RetryConfig::default()
-         },
-      );
-      let mut req = make_request("https://example.com");
-
-      req.max_retries = Some(0);
-
-      assert_eq!(state.resolve_max_retries(&req), 0);
+      assert_eq!(state.resolve_max_retries(&req), expected);
    }
 
    fn build_test_state_with_retry(domains: &[&str], retry: RetryConfig) -> HttpClientState {
@@ -2000,106 +1860,70 @@ mod tests {
       HttpClientState::new(client, allowlist, config)
    }
 
-   #[test]
-   fn test_calculate_backoff_first_retry() {
+   // upper is the attempt's base, min(initial * 2^(attempt - 1), max). Equal
+   // jitter keeps the result in [upper/2, upper).
+   #[rstest]
+   #[case::first_retry(200, 10_000, 1, 200)]
+   // attempt=1: base=200ms (first_retry), attempt=2: base=400ms, attempt=3:
+   // base=800ms. These windows are disjoint, so growth holds for any jitter value.
+   #[case::growth_attempt_2(200, 60_000, 2, 400)]
+   #[case::growth_attempt_3(200, 60_000, 3, 800)]
+   // attempt=5: 1000 * 2^4 = 16000ms, capped to 2000ms
+   #[case::capped_at_max(1000, 2000, 5, 2000)]
+   // Very high attempt number should not panic. Capped at max_backoff (10s),
+   // so the jitter window is [5s, 10s)
+   #[case::no_overflow_on_high_attempt(200, 10_000, 100, 10_000)]
+   fn test_calculate_backoff_window(
+      #[case] initial_backoff_ms: u64,
+      #[case] max_backoff_ms: u64,
+      #[case] attempt: u32,
+      #[case] upper_ms: u64,
+   ) {
       let config = RetryConfig {
-         initial_backoff: Duration::from_millis(200),
-         max_backoff: Duration::from_secs(10),
+         initial_backoff: Duration::from_millis(initial_backoff_ms),
+         max_backoff: Duration::from_millis(max_backoff_ms),
          ..RetryConfig::default()
       };
+      let upper = Duration::from_millis(upper_ms);
+      let lower = upper / 2;
 
-      let backoff = calculate_backoff(&config, 1, None);
+      let backoff = calculate_backoff(&config, attempt, None);
 
-      // Equal jitter: result is in [base/2, base) = [100ms, 200ms)
-      assert!(
-         (Duration::from_millis(100)..Duration::from_millis(200)).contains(&backoff),
-         "backoff = {backoff:?}"
-      );
+      assert!((lower..upper).contains(&backoff), "backoff = {backoff:?}");
    }
 
-   #[test]
-   fn test_calculate_backoff_exponential_growth() {
+   #[rstest]
+   #[case::header_seconds(Duration::from_secs(60), "5", Duration::from_secs(5))]
+   #[case::capped_at_max_retry_after(Duration::from_secs(10), "999", Duration::from_secs(10))]
+   #[case::header_zero(Duration::from_secs(60), "0", Duration::from_secs(0))]
+   fn test_calculate_backoff_with_retry_after(
+      #[case] max_retry_after: Duration,
+      #[case] retry_after: &str,
+      #[case] expected: Duration,
+   ) {
       let config = RetryConfig {
-         initial_backoff: Duration::from_millis(200),
-         max_backoff: Duration::from_secs(60),
+         max_retry_after,
          ..RetryConfig::default()
       };
-
-      // attempt=1: base=200ms, attempt=2: base=400ms, attempt=3: base=800ms
-      let b1 = calculate_backoff(&config, 1, None);
-      let b2 = calculate_backoff(&config, 2, None);
-      let b3 = calculate_backoff(&config, 3, None);
-
-      // Equal jitter keeps each result in [base/2, base). These windows
-      // are disjoint, so growth holds for any jitter value.
-      assert!(
-         (Duration::from_millis(100)..Duration::from_millis(200)).contains(&b1),
-         "b1 = {b1:?}"
-      );
-      assert!(
-         (Duration::from_millis(200)..Duration::from_millis(400)).contains(&b2),
-         "b2 = {b2:?}"
-      );
-      assert!(
-         (Duration::from_millis(400)..Duration::from_millis(800)).contains(&b3),
-         "b3 = {b3:?}"
-      );
-   }
-
-   #[test]
-   fn test_calculate_backoff_capped_at_max() {
-      let config = RetryConfig {
-         initial_backoff: Duration::from_millis(1000),
-         max_backoff: Duration::from_millis(2000),
-         ..RetryConfig::default()
-      };
-
-      // attempt=5: 1000 * 2^4 = 16000ms, capped to 2000ms
-      let backoff = calculate_backoff(&config, 5, None);
-
-      assert!(
-         (Duration::from_millis(1000)..Duration::from_millis(2000)).contains(&backoff),
-         "backoff = {backoff:?}"
-      );
-   }
-
-   #[test]
-   fn test_calculate_backoff_with_retry_after_header() {
-      let config = RetryConfig::default();
       let mut headers = HeaderMap::new();
-      headers.insert("retry-after", "5".parse().unwrap());
+      headers.insert("retry-after", retry_after.parse().unwrap());
       let resp = raw_response_with_headers(headers);
 
       let backoff = calculate_backoff(&config, 1, Some(&Ok(resp)));
 
-      assert_eq!(backoff, Duration::from_secs(5));
+      assert_eq!(backoff, expected);
    }
 
-   #[test]
-   fn test_calculate_backoff_retry_after_capped() {
-      let config = RetryConfig {
-         max_retry_after: Duration::from_secs(10),
-         ..RetryConfig::default()
-      };
+   #[rstest]
+   #[case::valid_seconds("120", Some(Duration::from_secs(120)))]
+   #[case::non_numeric_http_date("Wed, 21 Oct 2025 07:28:00 GMT", None)]
+   #[case::zero_seconds("0", Some(Duration::from_secs(0)))]
+   fn test_parse_retry_after(#[case] retry_after: &str, #[case] expected: Option<Duration>) {
       let mut headers = HeaderMap::new();
-      headers.insert("retry-after", "999".parse().unwrap());
+      headers.insert("retry-after", retry_after.parse().unwrap());
       let resp = raw_response_with_headers(headers);
 
-      let backoff = calculate_backoff(&config, 1, Some(&Ok(resp)));
-
-      assert_eq!(backoff, Duration::from_secs(10));
-   }
-
-   #[test]
-   fn test_parse_retry_after_valid_seconds() {
-      let mut headers = HeaderMap::new();
-      headers.insert("retry-after", "120".parse().unwrap());
-      let resp = raw_response_with_headers(headers);
-
-      assert_eq!(
-         parse_retry_after_from_response(&resp),
-         Some(Duration::from_secs(120))
-      );
+      assert_eq!(parse_retry_after_from_response(&resp), expected);
    }
 
    #[test]
@@ -2107,60 +1931,6 @@ mod tests {
       let resp = raw_response_with_headers(HeaderMap::new());
 
       assert_eq!(parse_retry_after_from_response(&resp), None);
-   }
-
-   #[test]
-   fn test_parse_retry_after_non_numeric_ignored() {
-      let mut headers = HeaderMap::new();
-      headers.insert(
-         "retry-after",
-         "Wed, 21 Oct 2025 07:28:00 GMT".parse().unwrap(),
-      );
-      let resp = raw_response_with_headers(headers);
-
-      assert_eq!(parse_retry_after_from_response(&resp), None);
-   }
-
-   #[test]
-   fn test_parse_retry_after_zero_seconds() {
-      let mut headers = HeaderMap::new();
-      headers.insert("retry-after", "0".parse().unwrap());
-      let resp = raw_response_with_headers(headers);
-
-      assert_eq!(
-         parse_retry_after_from_response(&resp),
-         Some(Duration::from_secs(0))
-      );
-   }
-
-   #[test]
-   fn test_calculate_backoff_with_retry_after_zero() {
-      let config = RetryConfig::default();
-      let mut headers = HeaderMap::new();
-      headers.insert("retry-after", "0".parse().unwrap());
-      let resp = raw_response_with_headers(headers);
-
-      let backoff = calculate_backoff(&config, 1, Some(&Ok(resp)));
-
-      assert_eq!(backoff, Duration::from_secs(0));
-   }
-
-   #[test]
-   fn test_calculate_backoff_no_overflow_on_high_attempt() {
-      let config = RetryConfig {
-         initial_backoff: Duration::from_millis(200),
-         max_backoff: Duration::from_secs(10),
-         ..RetryConfig::default()
-      };
-
-      // Very high attempt number should not panic
-      let backoff = calculate_backoff(&config, 100, None);
-
-      // Capped at max_backoff (10s), so jitter window is [5s, 10s)
-      assert!(
-         (Duration::from_secs(5)..Duration::from_secs(10)).contains(&backoff),
-         "backoff = {backoff:?}"
-      );
    }
 
    #[test]
@@ -2369,30 +2139,17 @@ mod tests {
       assert_eq!(resp.metadata.status, 200);
    }
 
+   #[rstest]
+   #[case::title_case("Host")]
+   #[case::mixed_case("hOsT")]
    #[tokio::test]
-   async fn test_execute_rejects_host_header() {
+   async fn test_execute_rejects_host_header(#[case] header_name: &str) {
       let state = build_localhost_test_state(10, 10_000_000);
       let server = MockServer::start().await;
       let mut req = make_request(&localhost_url(&server, "/api"));
 
       req.headers = Some(HashMap::from([(
-         "Host".to_string(),
-         "evil.com".to_string(),
-      )]));
-
-      let err = state.execute(req).await.unwrap_err();
-
-      assert!(matches!(err, Error::ForbiddenHeader(_)));
-   }
-
-   #[tokio::test]
-   async fn test_execute_rejects_host_header_case_insensitive() {
-      let state = build_localhost_test_state(10, 10_000_000);
-      let server = MockServer::start().await;
-      let mut req = make_request(&localhost_url(&server, "/api"));
-
-      req.headers = Some(HashMap::from([(
-         "hOsT".to_string(),
+         header_name.to_string(),
          "evil.com".to_string(),
       )]));
 
@@ -2454,48 +2211,31 @@ mod tests {
       assert_eq!(resp.metadata.status, 200);
    }
 
+   #[rstest]
+   #[case::text("text/plain", b"plain text response".to_vec())]
+   // PNG header bytes: no base64 encoding at the execute layer
+   #[case::binary("image/png", vec![0x89, 0x50, 0x4E, 0x47])]
+   // "Hel\xFFo" sent as text/plain: no lossy UTF-8 conversion at the execute layer
+   #[case::invalid_utf8_as_text("text/plain", vec![0x48, 0x65, 0x6C, 0xFF, 0x6F])]
    #[tokio::test]
-   async fn test_execute_text_body_encoding() {
+   async fn test_execute_returns_raw_body_bytes(#[case] content_type: &str, #[case] body: Vec<u8>) {
       let server = MockServer::start().await;
 
       Mock::given(method("GET"))
-         .and(path("/text"))
+         .and(path("/body"))
          .respond_with(
             ResponseTemplate::new(200)
-               .set_body_string("plain text response")
-               .insert_header("Content-Type", "text/plain"),
+               .set_body_bytes(body.clone())
+               .insert_header("Content-Type", content_type),
          )
          .mount(&server)
          .await;
 
       let state = build_localhost_test_state(10, 10_000_000);
-      let req = make_request(&localhost_url(&server, "/text"));
+      let req = make_request(&localhost_url(&server, "/body"));
       let resp = state.execute(req).await.unwrap();
 
-      assert_eq!(resp.body, b"plain text response");
-   }
-
-   #[tokio::test]
-   async fn test_execute_binary_body_encoding() {
-      let server = MockServer::start().await;
-      let binary_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header bytes
-
-      Mock::given(method("GET"))
-         .and(path("/image"))
-         .respond_with(
-            ResponseTemplate::new(200)
-               .set_body_bytes(binary_data.clone())
-               .insert_header("Content-Type", "image/png"),
-         )
-         .mount(&server)
-         .await;
-
-      let state = build_localhost_test_state(10, 10_000_000);
-      let req = make_request(&localhost_url(&server, "/image"));
-      let resp = state.execute(req).await.unwrap();
-
-      // Body is now raw bytes (no base64 encoding at the execute layer)
-      assert_eq!(resp.body, binary_data);
+      assert_eq!(resp.body, body);
    }
 
    #[tokio::test]
@@ -2646,31 +2386,6 @@ mod tests {
       let resp = state.execute(req).await.unwrap();
 
       assert_eq!(resp.metadata.status, 200);
-   }
-
-   #[tokio::test]
-   async fn test_execute_returns_raw_bytes_for_invalid_utf8() {
-      let server = MockServer::start().await;
-
-      // Send binary data (invalid UTF-8) with text/plain content type
-      let binary_body: Vec<u8> = vec![0x48, 0x65, 0x6C, 0xFF, 0x6F]; // "Hel\xFFo"
-
-      Mock::given(method("GET"))
-         .and(path("/lossy"))
-         .respond_with(
-            ResponseTemplate::new(200)
-               .set_body_bytes(binary_body.clone())
-               .insert_header("Content-Type", "text/plain"),
-         )
-         .mount(&server)
-         .await;
-
-      let state = build_localhost_test_state(10, 10_000_000);
-      let req = make_request(&localhost_url(&server, "/lossy"));
-      let resp = state.execute(req).await.unwrap();
-
-      // Body is raw bytes — no lossy UTF-8 conversion at the execute layer
-      assert_eq!(resp.body, binary_body);
    }
 
    #[tokio::test]
@@ -3096,107 +2811,59 @@ mod tests {
 
    // --- validate_header_name tests ---
 
-   #[test]
-   fn test_validate_header_name_allows_normal_headers() {
-      assert!(validate_header_name("authorization").is_ok());
-      assert!(validate_header_name("content-type").is_ok());
-      assert!(validate_header_name("accept").is_ok());
-      assert!(validate_header_name("x-custom-header").is_ok());
-      assert!(validate_header_name("user-agent").is_ok());
-      assert!(validate_header_name("accept-encoding").is_ok());
-      assert!(validate_header_name("cookie").is_ok());
+   #[rstest]
+   #[case::authorization("authorization")]
+   #[case::content_type("content-type")]
+   #[case::accept("accept")]
+   #[case::x_custom_header("x-custom-header")]
+   #[case::user_agent("user-agent")]
+   #[case::accept_encoding("accept-encoding")]
+   #[case::cookie("cookie")]
+   // X-Forwarded-* headers are application-layer, not transport-layer.
+   // Blocking them would break legitimate use cases (e.g., proxy context
+   // forwarding). The risk requires specific server misconfiguration.
+   #[case::x_forwarded_for_lower("x-forwarded-for")]
+   #[case::x_forwarded_for_title_case("X-Forwarded-For")]
+   #[case::x_forwarded_host("x-forwarded-host")]
+   #[case::x_real_ip("x-real-ip")]
+   // "sec" alone is not in FORBIDDEN_HEADERS and doesn't start with "sec-"
+   #[case::sec_without_dash("sec")]
+   fn test_validate_header_name_allows(#[case] name: &str) {
+      assert!(validate_header_name(name).is_ok());
    }
 
-   #[test]
-   fn test_validate_header_name_blocks_host() {
-      let result = validate_header_name("host");
+   #[rstest]
+   #[case::host_lower("host")]
+   #[case::host_upper("HOST")]
+   #[case::host_title_case("Host")]
+   #[case::host_mixed_case("hOsT")]
+   #[case::connection_lower("connection")]
+   #[case::connection_title_case("Connection")]
+   #[case::keep_alive_lower("keep-alive")]
+   #[case::keep_alive_title_case("Keep-Alive")]
+   #[case::transfer_encoding_lower("transfer-encoding")]
+   #[case::transfer_encoding_title_case("Transfer-Encoding")]
+   #[case::te_lower("te")]
+   #[case::te_upper("TE")]
+   #[case::upgrade_lower("upgrade")]
+   #[case::upgrade_title_case("Upgrade")]
+   #[case::trailer_lower("trailer")]
+   #[case::trailer_title_case("Trailer")]
+   #[case::sec_fetch_site("sec-fetch-site")]
+   #[case::sec_fetch_mode("sec-fetch-mode")]
+   #[case::sec_ch_ua("sec-ch-ua")]
+   #[case::sec_fetch_dest_title_case("Sec-Fetch-Dest")]
+   #[case::proxy_authorization("proxy-authorization")]
+   #[case::proxy_connection("proxy-connection")]
+   #[case::proxy_authenticate_title_case("Proxy-Authenticate")]
+   fn test_validate_header_name_blocks(#[case] name: &str) {
+      let result = validate_header_name(name);
 
-      assert!(matches!(result, Err(Error::ForbiddenHeader(ref h)) if h == "host"));
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_host_case_insensitive() {
-      assert!(validate_header_name("HOST").is_err());
-      assert!(validate_header_name("Host").is_err());
-      assert!(validate_header_name("hOsT").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_connection() {
-      assert!(validate_header_name("connection").is_err());
-      assert!(validate_header_name("Connection").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_keep_alive() {
-      assert!(validate_header_name("keep-alive").is_err());
-      assert!(validate_header_name("Keep-Alive").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_transfer_encoding() {
-      assert!(validate_header_name("transfer-encoding").is_err());
-      assert!(validate_header_name("Transfer-Encoding").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_te() {
-      assert!(validate_header_name("te").is_err());
-      assert!(validate_header_name("TE").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_upgrade() {
-      assert!(validate_header_name("upgrade").is_err());
-      assert!(validate_header_name("Upgrade").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_trailer() {
-      assert!(validate_header_name("trailer").is_err());
-      assert!(validate_header_name("Trailer").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_allows_x_forwarded_headers() {
-      // X-Forwarded-* headers are application-layer, not transport-layer.
-      // Blocking them would break legitimate use cases (e.g., proxy context
-      // forwarding). The risk requires specific server misconfiguration.
-      assert!(validate_header_name("x-forwarded-for").is_ok());
-      assert!(validate_header_name("X-Forwarded-For").is_ok());
-      assert!(validate_header_name("x-forwarded-host").is_ok());
-      assert!(validate_header_name("x-real-ip").is_ok());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_sec_prefix() {
-      assert!(validate_header_name("sec-fetch-site").is_err());
-      assert!(validate_header_name("sec-fetch-mode").is_err());
-      assert!(validate_header_name("sec-ch-ua").is_err());
-      assert!(validate_header_name("Sec-Fetch-Dest").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_blocks_proxy_prefix() {
-      assert!(validate_header_name("proxy-authorization").is_err());
-      assert!(validate_header_name("proxy-connection").is_err());
-      assert!(validate_header_name("Proxy-Authenticate").is_err());
-   }
-
-   #[test]
-   fn test_validate_header_name_error_contains_lowercased_name() {
-      let result = validate_header_name("Transfer-Encoding");
-
-      match result {
-         Err(Error::ForbiddenHeader(name)) => assert_eq!(name, "transfer-encoding"),
-         _ => panic!("expected ForbiddenHeader error"),
-      }
-   }
-
-   #[test]
-   fn test_validate_header_name_sec_prefix_not_blocked_without_dash() {
-      // "sec" alone is not in FORBIDDEN_HEADERS and doesn't start with "sec-"
-      assert!(validate_header_name("sec").is_ok());
+      // The error carries the lowercased name
+      assert!(
+         matches!(result, Err(Error::ForbiddenHeader(ref h)) if *h == name.to_ascii_lowercase()),
+         "got: {result:?}"
+      );
    }
 
    // --- merge_headers tests ---
