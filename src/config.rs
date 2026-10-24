@@ -153,6 +153,7 @@ impl Default for RetryConfig {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
    #[test]
    fn test_config_default_values_correct() {
@@ -212,107 +213,100 @@ mod tests {
       assert_eq!(config.initial_backoff, Duration::from_millis(200));
    }
 
-   #[test]
-   fn test_is_retryable_status() {
+   #[rstest]
+   // 408 Request Timeout is retried because it represents a server-side idle
+   // connection timeout (RFC 9110 §15.5.9) — the server is explicitly inviting
+   // the client to resend the request.
+   #[case::request_timeout_408(408, true)]
+   #[case::too_many_requests_429(429, true)]
+   #[case::internal_server_error_500(500, true)]
+   #[case::bad_gateway_502(502, true)]
+   #[case::service_unavailable_503(503, true)]
+   #[case::gateway_timeout_504(504, true)]
+   #[case::ok_200(200, false)]
+   #[case::bad_request_400(400, false)]
+   #[case::unauthorized_401(401, false)]
+   #[case::forbidden_403(403, false)]
+   #[case::not_found_404(404, false)]
+   #[case::not_implemented_501(501, false)]
+   fn test_is_retryable_status(#[case] status: u16, #[case] expected: bool) {
       let config = RetryConfig::default();
 
-      assert!(config.is_retryable_status(408));
-      assert!(config.is_retryable_status(429));
-      assert!(config.is_retryable_status(500));
-      assert!(config.is_retryable_status(502));
-      assert!(config.is_retryable_status(503));
-      assert!(config.is_retryable_status(504));
-      assert!(!config.is_retryable_status(200));
-      assert!(!config.is_retryable_status(400));
-      assert!(!config.is_retryable_status(401));
-      assert!(!config.is_retryable_status(403));
-      assert!(!config.is_retryable_status(404));
-      assert!(!config.is_retryable_status(501));
+      assert_eq!(config.is_retryable_status(status), expected);
    }
 
-   /// 408 Request Timeout is retried because it represents a server-side idle
-   /// connection timeout (RFC 9110 §15.5.9) — the server is explicitly inviting
-   /// the client to resend the request.
-   #[test]
-   fn test_is_retryable_status_408_request_timeout() {
+   #[rstest]
+   #[case::get_upper("GET", true)]
+   #[case::head_upper("HEAD", true)]
+   #[case::put_upper("PUT", true)]
+   #[case::delete_upper("DELETE", true)]
+   #[case::options_upper("OPTIONS", true)]
+   #[case::get_lower("get", true)]
+   #[case::put_lower("put", true)]
+   #[case::delete_lower("delete", true)]
+   // POST and PATCH are not idempotent (RFC 9110 §9.2.2) — retrying them
+   // risks duplicate side effects (e.g., creating duplicate resources or
+   // applying a patch twice). They are excluded from retries by default.
+   #[case::post_upper("POST", false)]
+   #[case::patch_upper("PATCH", false)]
+   fn test_is_retryable_method_default(#[case] method: &str, #[case] expected: bool) {
       let config = RetryConfig::default();
 
-      assert!(config.is_retryable_status(408));
+      assert_eq!(config.is_retryable_method(method), expected);
    }
 
-   #[test]
-   fn test_is_retryable_method_default() {
-      let config = RetryConfig::default();
-
-      assert!(config.is_retryable_method("GET"));
-      assert!(config.is_retryable_method("HEAD"));
-      assert!(config.is_retryable_method("PUT"));
-      assert!(config.is_retryable_method("DELETE"));
-      assert!(config.is_retryable_method("OPTIONS"));
-      assert!(config.is_retryable_method("get")); // case-insensitive
-      assert!(config.is_retryable_method("put")); // case-insensitive
-      assert!(config.is_retryable_method("delete")); // case-insensitive
-      assert!(!config.is_retryable_method("POST"));
-      assert!(!config.is_retryable_method("PATCH"));
-   }
-
-   /// POST and PATCH are not idempotent (RFC 9110 §9.2.2) — retrying them
-   /// risks duplicate side effects (e.g., creating duplicate resources or
-   /// applying a patch twice). They are excluded from retries by default.
-   #[test]
-   fn test_non_idempotent_methods_not_retried_by_default() {
-      let config = RetryConfig::default();
-
-      assert!(!config.is_retryable_method("POST"));
-      assert!(!config.is_retryable_method("PATCH"));
-   }
-
-   #[test]
-   fn test_is_retryable_method_none_allows_all() {
+   #[rstest]
+   #[case::get("GET")]
+   #[case::post("POST")]
+   #[case::put("PUT")]
+   #[case::delete("DELETE")]
+   #[case::patch("PATCH")]
+   fn test_is_retryable_method_none_allows_all(#[case] method: &str) {
       let config = RetryConfig {
          retryable_methods: None,
          ..RetryConfig::default()
       };
 
-      assert!(config.is_retryable_method("GET"));
-      assert!(config.is_retryable_method("POST"));
-      assert!(config.is_retryable_method("PUT"));
-      assert!(config.is_retryable_method("DELETE"));
-      assert!(config.is_retryable_method("PATCH"));
+      assert!(config.is_retryable_method(method));
    }
 
-   #[test]
-   fn test_is_retryable_status_empty_list() {
+   #[rstest]
+   #[case::too_many_requests_429(429)]
+   #[case::service_unavailable_503(503)]
+   fn test_is_retryable_status_empty_list(#[case] status: u16) {
       let config = RetryConfig {
          retryable_status_codes: vec![],
          ..RetryConfig::default()
       };
 
-      assert!(!config.is_retryable_status(429));
-      assert!(!config.is_retryable_status(503));
+      assert!(!config.is_retryable_status(status));
    }
 
-   #[test]
-   fn test_is_retryable_method_empty_list() {
+   #[rstest]
+   #[case::get("GET")]
+   #[case::post("POST")]
+   fn test_is_retryable_method_empty_list(#[case] method: &str) {
       let config = RetryConfig {
          retryable_methods: Some(vec![]),
          ..RetryConfig::default()
       };
 
-      assert!(!config.is_retryable_method("GET"));
-      assert!(!config.is_retryable_method("POST"));
+      assert!(!config.is_retryable_method(method));
    }
 
-   #[test]
-   fn test_custom_retryable_status_codes() {
+   #[rstest]
+   #[case::custom_418(418, true)]
+   #[case::custom_503(503, true)]
+   // Not in custom list
+   #[case::default_500_replaced(500, false)]
+   // Not in custom list
+   #[case::default_429_replaced(429, false)]
+   fn test_custom_retryable_status_codes(#[case] status: u16, #[case] expected: bool) {
       let config = RetryConfig {
          retryable_status_codes: vec![418, 503],
          ..RetryConfig::default()
       };
 
-      assert!(config.is_retryable_status(418));
-      assert!(config.is_retryable_status(503));
-      assert!(!config.is_retryable_status(500)); // Not in custom list
-      assert!(!config.is_retryable_status(429)); // Not in custom list
+      assert_eq!(config.is_retryable_status(status), expected);
    }
 }

@@ -93,6 +93,7 @@ fn pack_ipc_response(result: ExecuteResult) -> Result<tauri::ipc::Response> {
 mod tests {
    use super::*;
    use crate::types::FetchResponseMetadata;
+   use rstest::rstest;
    use std::collections::HashMap;
 
    #[test]
@@ -134,18 +135,24 @@ mod tests {
       assert_eq!(&buf[4 + meta_len..], b"hello world");
    }
 
-   #[test]
-   fn test_pack_ipc_response_empty_body() {
+   #[rstest]
+   // No body bytes after metadata
+   #[case::empty(Vec::new())]
+   // PNG signature: binary bytes must come through unchanged
+   #[case::binary(vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])]
+   // Larger than u8::MAX: every body byte must still follow the metadata
+   #[case::larger_than_u8_max(vec![0xAB; 1024])]
+   fn test_pack_ipc_response_body_preserved(#[case] body: Vec<u8>) {
       let result = ExecuteResult {
          metadata: FetchResponseMetadata {
-            status: 204,
-            status_text: "No Content".to_string(),
+            status: 200,
+            status_text: "OK".to_string(),
             headers: HashMap::new(),
             url: "https://example.com".to_string(),
             redirected: false,
             retry_count: 0,
          },
-         body: Vec::new(),
+         body: body.clone(),
       };
 
       let resp = pack_ipc_response(result).unwrap();
@@ -153,33 +160,8 @@ mod tests {
 
       let meta_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
 
-      // No body bytes after metadata
-      assert_eq!(buf.len(), 4 + meta_len);
-   }
-
-   #[test]
-   fn test_pack_ipc_response_binary_body_preserved() {
-      let binary_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-
-      let result = ExecuteResult {
-         metadata: FetchResponseMetadata {
-            status: 200,
-            status_text: "OK".to_string(),
-            headers: HashMap::from([("content-type".to_string(), vec!["image/png".to_string()])]),
-            url: "https://example.com/image.png".to_string(),
-            redirected: false,
-            retry_count: 0,
-         },
-         body: binary_data.clone(),
-      };
-
-      let resp = pack_ipc_response(result).unwrap();
-      let buf = extract_raw_bytes(resp);
-
-      let meta_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-
-      // Binary body is preserved exactly
-      assert_eq!(&buf[4 + meta_len..], &binary_data);
+      // Exactly the body bytes follow the metadata
+      assert_eq!(&buf[4 + meta_len..], body.as_slice());
    }
 
    #[test]
@@ -257,32 +239,6 @@ mod tests {
       assert!(meta_json["headers"]["content-type"].is_array());
       assert_eq!(meta_json["headers"]["content-type"][0], "application/json");
       assert_eq!(meta_json["headers"]["x-request-id"][0], "abc-123");
-   }
-
-   #[test]
-   fn test_pack_ipc_response_large_body() {
-      // Verify framing works with bodies larger than u8::MAX
-      let large_body = vec![0xABu8; 1024];
-
-      let result = ExecuteResult {
-         metadata: FetchResponseMetadata {
-            status: 200,
-            status_text: "OK".to_string(),
-            headers: HashMap::new(),
-            url: "https://example.com".to_string(),
-            redirected: false,
-            retry_count: 0,
-         },
-         body: large_body.clone(),
-      };
-
-      let resp = pack_ipc_response(result).unwrap();
-      let buf = extract_raw_bytes(resp);
-
-      let meta_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-
-      assert_eq!(buf.len(), 4 + meta_len + 1024);
-      assert_eq!(&buf[4 + meta_len..], &large_body);
    }
 
    #[test]

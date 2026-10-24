@@ -451,6 +451,7 @@ pub fn exact_domains_validator(domains: &[&str]) -> impl Fn(&str) -> bool + Send
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
    fn allowlist(patterns: &[&str]) -> DomainAllowlist {
       DomainAllowlist::new(patterns.iter().map(|s| s.to_string()).collect()).unwrap()
@@ -458,22 +459,26 @@ mod tests {
 
    // --- Pattern matching ---
 
-   #[test]
-   fn test_exact_match() {
+   #[rstest]
+   #[case::exact_host("https://api.example.com/path", true)]
+   #[case::sibling_subdomain("https://other.example.com/path", false)]
+   fn test_exact_match(#[case] url: &str, #[case] allowed: bool) {
       let al = allowlist(&["api.example.com"]);
 
-      assert!(al.validate_url("https://api.example.com/path").is_ok());
-      assert!(al.validate_url("https://other.example.com/path").is_err());
+      assert_eq!(al.validate_url(url).is_ok(), allowed);
    }
 
-   #[test]
-   fn test_wildcard_subdomain_match() {
+   #[rstest]
+   #[case::subdomain("https://api.example.com/path", true)]
+   #[case::deep_subdomain("https://deep.sub.example.com/path", true)]
+   // Wildcard does NOT match the base domain itself
+   #[case::base_domain("https://example.com/path", false)]
+   // "notexample.com" ends with "example.com" but should not match
+   #[case::partial_suffix("https://notexample.com", false)]
+   fn test_wildcard_subdomain_match(#[case] url: &str, #[case] allowed: bool) {
       let al = allowlist(&["*.example.com"]);
 
-      assert!(al.validate_url("https://api.example.com/path").is_ok());
-      assert!(al.validate_url("https://deep.sub.example.com/path").is_ok());
-      // Wildcard does NOT match the base domain itself
-      assert!(al.validate_url("https://example.com/path").is_err());
+      assert_eq!(al.validate_url(url).is_ok(), allowed);
    }
 
    #[test]
@@ -491,24 +496,26 @@ mod tests {
       assert!(al.is_empty());
    }
 
-   #[test]
-   fn test_allow_domain_with_subdomains_helper() {
+   #[rstest]
+   #[case::base_domain("https://example.com/path", true)]
+   #[case::subdomain("https://api.example.com/path", true)]
+   #[case::unrelated_domain("https://evil.com", false)]
+   fn test_allow_domain_with_subdomains_helper(#[case] url: &str, #[case] allowed: bool) {
       let patterns = allow_domain_with_subdomains("example.com");
       let al = DomainAllowlist::new(patterns).unwrap();
 
-      assert!(al.validate_url("https://example.com/path").is_ok());
-      assert!(al.validate_url("https://api.example.com/path").is_ok());
-      assert!(al.validate_url("https://evil.com").is_err());
+      assert_eq!(al.validate_url(url).is_ok(), allowed);
    }
 
    // --- Scheme validation ---
 
-   #[test]
-   fn test_http_scheme_allowed() {
+   #[rstest]
+   #[case::http("http://example.com")]
+   #[case::https("https://example.com")]
+   fn test_http_scheme_allowed(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
 
-      assert!(al.validate_url("http://example.com").is_ok());
-      assert!(al.validate_url("https://example.com").is_ok());
+      assert!(al.validate_url(url).is_ok());
    }
 
    #[test]
@@ -520,73 +527,33 @@ mod tests {
       assert!(matches!(err, Error::SchemeNotAllowed(_)));
    }
 
-   #[test]
-   fn test_javascript_scheme_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      // `url` crate may fail to parse this, which is also acceptable
-      let result = al.validate_url("javascript:alert(1)");
-
-      assert!(result.is_err());
-   }
-
    // --- Userinfo rejection ---
 
-   #[test]
-   fn test_userinfo_rejected() {
+   #[rstest]
+   #[case::username_and_password("https://user:pass@example.com")]
+   #[case::username_only("https://user@example.com")]
+   fn test_userinfo_rejected(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
 
-      let err = al
-         .validate_url("https://user:pass@example.com")
-         .unwrap_err();
-
-      assert!(matches!(err, Error::UserinfoNotAllowed));
-   }
-
-   #[test]
-   fn test_username_only_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      let err = al.validate_url("https://user@example.com").unwrap_err();
+      let err = al.validate_url(url).unwrap_err();
 
       assert!(matches!(err, Error::UserinfoNotAllowed));
    }
 
    // --- IP address rejection ---
 
-   #[test]
-   fn test_ipv4_rejected() {
+   #[rstest]
+   #[case::ipv4_loopback("https://127.0.0.1/path")]
+   #[case::ipv6_loopback("https://[::1]/path")]
+   // 2130706433 = 127.0.0.1 in decimal
+   #[case::decimal_2130706433("https://2130706433/path")]
+   #[case::hex_0x7f000001("https://0x7f000001/path")]
+   // 0177.0.0.1 = 127.0.0.1 in octal
+   #[case::octal_0177_0_0_1("https://0177.0.0.1/path")]
+   fn test_ip_literal_rejected(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
 
-      let err = al.validate_url("https://127.0.0.1/path").unwrap_err();
-
-      assert!(matches!(err, Error::IpAddressNotAllowed));
-   }
-
-   #[test]
-   fn test_ipv6_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      let err = al.validate_url("https://[::1]/path").unwrap_err();
-
-      assert!(matches!(err, Error::IpAddressNotAllowed));
-   }
-
-   #[test]
-   fn test_decimal_ip_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      // 2130706433 = 127.0.0.1 in decimal
-      let err = al.validate_url("https://2130706433/path").unwrap_err();
-
-      assert!(matches!(err, Error::IpAddressNotAllowed));
-   }
-
-   #[test]
-   fn test_hex_ip_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      let err = al.validate_url("https://0x7f000001/path").unwrap_err();
+      let err = al.validate_url(url).unwrap_err();
 
       assert!(matches!(err, Error::IpAddressNotAllowed));
    }
@@ -615,162 +582,96 @@ mod tests {
 
    // --- Private IP detection ---
 
-   #[test]
-   fn test_private_ipv4_ranges() {
-      assert!(is_private_ip(&"127.0.0.1".parse().unwrap()));
-      assert!(is_private_ip(&"10.0.0.1".parse().unwrap()));
-      assert!(is_private_ip(&"172.16.0.1".parse().unwrap()));
-      assert!(is_private_ip(&"192.168.1.1".parse().unwrap()));
-      assert!(is_private_ip(&"169.254.1.1".parse().unwrap()));
-      assert!(is_private_ip(&"0.0.0.0".parse().unwrap()));
-
-      assert!(!is_private_ip(&"8.8.8.8".parse().unwrap()));
-      assert!(!is_private_ip(&"1.1.1.1".parse().unwrap()));
-   }
-
-   #[test]
-   fn test_private_ipv6_ranges() {
-      assert!(is_private_ip(&"::1".parse().unwrap()));
-      assert!(is_private_ip(&"fc00::1".parse().unwrap()));
-      assert!(is_private_ip(&"fd00::1".parse().unwrap()));
-      assert!(is_private_ip(&"fe80::1".parse().unwrap()));
-
-      assert!(!is_private_ip(&"2001:db8::1".parse().unwrap()));
-   }
-
-   #[test]
-   fn test_ipv4_mapped_ipv6_private() {
-      // ::ffff:127.0.0.1
-      assert!(is_private_ip(&"::ffff:127.0.0.1".parse().unwrap()));
-      assert!(!is_private_ip(&"::ffff:8.8.8.8".parse().unwrap()));
+   #[rstest]
+   #[case::v4_loopback("127.0.0.1", true)]
+   #[case::v4_rfc1918_10("10.0.0.1", true)]
+   #[case::v4_rfc1918_172_16("172.16.0.1", true)]
+   #[case::v4_rfc1918_192_168("192.168.1.1", true)]
+   #[case::v4_link_local("169.254.1.1", true)]
+   #[case::v4_unspecified("0.0.0.0", true)]
+   #[case::v4_public_google_dns("8.8.8.8", false)]
+   #[case::v4_public_cloudflare_dns("1.1.1.1", false)]
+   #[case::v6_loopback("::1", true)]
+   #[case::v6_unique_local_fc00("fc00::1", true)]
+   #[case::v6_unique_local_fd00("fd00::1", true)]
+   #[case::v6_link_local("fe80::1", true)]
+   #[case::v6_documentation_prefix("2001:db8::1", false)]
+   #[case::v4_mapped_loopback("::ffff:127.0.0.1", true)]
+   #[case::v4_mapped_public("::ffff:8.8.8.8", false)]
+   fn test_is_private_ip_ranges(#[case] ip: &str, #[case] expected: bool) {
+      assert_eq!(is_private_ip(&ip.parse().unwrap()), expected);
    }
 
    // --- is_ip_like edge cases ---
 
-   #[test]
-   fn test_is_ip_like_dotted_octal() {
-      // Octal representation: 0177.0.0.1 = 127.0.0.1
-      assert!(is_ip_like("0177.0.0.1"));
-   }
-
-   #[test]
-   fn test_is_ip_like_dotted_hex() {
-      assert!(is_ip_like("0x7f.0x0.0x0.0x1"));
-   }
-
-   #[test]
-   fn test_is_ip_like_pure_decimal() {
-      assert!(is_ip_like("2130706433"));
-   }
-
-   #[test]
-   fn test_is_ip_like_hex_prefix() {
-      assert!(is_ip_like("0x7f000001"));
-   }
-
-   #[test]
-   fn test_is_ip_like_rejects_normal_domains() {
-      assert!(!is_ip_like("example.com"));
-      assert!(!is_ip_like("api.example.com"));
-      assert!(!is_ip_like("my-domain.org"));
-   }
-
-   #[test]
-   fn test_is_ip_like_does_not_flag_real_domains() {
-      // Domains with IP-like segments but containing non-numeric chars
-      assert!(!is_ip_like("192-168-1-1.example.com"));
-      assert!(!is_ip_like("ip-10-0-0-1.ec2.internal"));
-      assert!(!is_ip_like("host123.example.com"));
-   }
-
-   #[test]
-   fn test_is_ip_like_empty_string_safe() {
-      assert!(!is_ip_like(""));
-   }
-
-   #[test]
-   fn test_is_ip_like_bracketed_ipv6() {
-      // After bracket stripping, "::1" is not caught by is_ip_like
-      // (it contains colons, not digits-only) - but the url crate
-      // would parse it as IPv6 and catch it in validate_parsed_url
-      assert!(!is_ip_like("[::1]"));
+   #[rstest]
+   // Octal representation: 0177.0.0.1 = 127.0.0.1
+   #[case::dotted_octal("0177.0.0.1", true)]
+   #[case::dotted_hex("0x7f.0x0.0x0.0x1", true)]
+   #[case::pure_decimal("2130706433", true)]
+   #[case::hex_prefix("0x7f000001", true)]
+   #[case::normal_domain("example.com", false)]
+   #[case::normal_subdomain("api.example.com", false)]
+   #[case::normal_hyphenated_domain("my-domain.org", false)]
+   // Domains with IP-like segments but containing non-numeric chars
+   #[case::hyphenated_ip_segments("192-168-1-1.example.com", false)]
+   #[case::ec2_internal_hostname("ip-10-0-0-1.ec2.internal", false)]
+   #[case::alphanumeric_label("host123.example.com", false)]
+   #[case::empty_string("", false)]
+   // After bracket stripping, "::1" is not caught by is_ip_like
+   // (it contains colons, not digits-only) - but the url crate
+   // would parse it as IPv6 and catch it in validate_parsed_url
+   #[case::bracketed_ipv6("[::1]", false)]
+   fn test_is_ip_like(#[case] host: &str, #[case] expected: bool) {
+      assert_eq!(is_ip_like(host), expected);
    }
 
    // --- Wildcard edge cases ---
 
-   #[test]
-   fn test_wildcard_does_not_match_partial_suffix() {
-      let al = allowlist(&["*.example.com"]);
-
-      // "notexample.com" ends with "example.com" but should not match
-      assert!(al.validate_url("https://notexample.com").is_err());
-   }
-
-   #[test]
-   fn test_multiple_patterns() {
+   #[rstest]
+   #[case::exact_pattern("https://api.example.com/path", true)]
+   #[case::wildcard_pattern("https://img.cdn.example.com/pic.png", true)]
+   #[case::unlisted_domain("https://example.com", false)]
+   fn test_multiple_patterns(#[case] url: &str, #[case] allowed: bool) {
       let al = allowlist(&["api.example.com", "*.cdn.example.com"]);
 
-      assert!(al.validate_url("https://api.example.com/path").is_ok());
-      assert!(
-         al.validate_url("https://img.cdn.example.com/pic.png")
-            .is_ok()
-      );
-      assert!(al.validate_url("https://example.com").is_err());
+      assert_eq!(al.validate_url(url).is_ok(), allowed);
    }
 
    // --- URL parsing edge cases ---
 
-   #[test]
-   fn test_data_scheme_rejected() {
+   #[rstest]
+   #[case::explicit_port("https://example.com:8443/path")]
+   #[case::query_and_fragment("https://example.com/path?key=val#frag")]
+   fn test_validate_url_parsing_edge_cases_accepted(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
-      let result = al.validate_url("data:text/html,<h1>hello</h1>");
 
-      assert!(result.is_err());
+      assert!(al.validate_url(url).is_ok());
    }
 
-   #[test]
-   fn test_url_with_port_allowed() {
+   #[rstest]
+   #[case::data_scheme("data:text/html,<h1>hello</h1>")]
+   // `url` crate may fail to parse this, which is also acceptable
+   #[case::javascript_scheme("javascript:alert(1)")]
+   #[case::empty_url("")]
+   fn test_validate_url_parsing_edge_cases_rejected(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
 
-      assert!(al.validate_url("https://example.com:8443/path").is_ok());
-   }
-
-   #[test]
-   fn test_url_with_query_and_fragment() {
-      let al = allowlist(&["example.com"]);
-
-      assert!(
-         al.validate_url("https://example.com/path?key=val#frag")
-            .is_ok()
-      );
-   }
-
-   #[test]
-   fn test_empty_url_rejected() {
-      let al = allowlist(&["example.com"]);
-
-      assert!(al.validate_url("").is_err());
+      assert!(al.validate_url(url).is_err());
    }
 
    // --- Private IP edge cases ---
 
-   #[test]
-   fn test_broadcast_is_private() {
-      assert!(is_private_ip(&"255.255.255.255".parse().unwrap()));
-   }
-
-   #[test]
-   fn test_ipv6_unspecified_is_private() {
-      assert!(is_private_ip(&"::".parse().unwrap()));
-   }
-
-   #[test]
-   fn test_172_boundary_values() {
-      // 172.16.0.0 - 172.31.255.255 is private
-      assert!(is_private_ip(&"172.16.0.1".parse().unwrap()));
-      assert!(is_private_ip(&"172.31.255.254".parse().unwrap()));
-      // 172.32.0.0 is NOT private
-      assert!(!is_private_ip(&"172.32.0.1".parse().unwrap()));
+   #[rstest]
+   #[case::v4_broadcast("255.255.255.255", true)]
+   #[case::v6_unspecified("::", true)]
+   // 172.16.0.0 - 172.31.255.255 is private
+   #[case::v4_rfc1918_172_range_start("172.16.0.1", true)]
+   #[case::v4_rfc1918_172_range_end("172.31.255.254", true)]
+   // 172.32.0.0 is NOT private
+   #[case::v4_above_rfc1918_172_range("172.32.0.1", false)]
+   fn test_is_private_ip_edge_cases(#[case] ip: &str, #[case] expected: bool) {
+      assert_eq!(is_private_ip(&ip.parse().unwrap()), expected);
    }
 
    // --- Dynamic allowlist (add_patterns) ---
@@ -1089,16 +990,17 @@ mod tests {
       assert_eq!(al.runtime_pattern_count(), 1);
    }
 
-   #[test]
-   fn test_is_runtime_domain() {
+   #[rstest]
+   #[case::runtime_domain("runtime.example.com", true)]
+   #[case::init_domain("init.example.com", false)]
+   #[case::nonexistent_domain("nonexistent.com", false)]
+   fn test_is_runtime_domain(#[case] domain: &str, #[case] expected: bool) {
       let mut al = allowlist(&["init.example.com"]);
 
       al.add_patterns(vec!["runtime.example.com".to_string()])
          .unwrap();
 
-      assert!(al.is_runtime_domain("runtime.example.com"));
-      assert!(!al.is_runtime_domain("init.example.com"));
-      assert!(!al.is_runtime_domain("nonexistent.com"));
+      assert_eq!(al.is_runtime_domain(domain), expected);
    }
 
    #[test]
@@ -1116,12 +1018,13 @@ mod tests {
 
    // --- validate_domain_pattern ---
 
-   #[test]
-   fn test_validate_domain_pattern_valid() {
-      assert!(validate_domain_pattern("example.com").is_ok());
-      assert!(validate_domain_pattern("api.example.com").is_ok());
-      assert!(validate_domain_pattern("*.example.com").is_ok());
-      assert!(validate_domain_pattern("my-domain.org").is_ok());
+   #[rstest]
+   #[case::plain_domain("example.com")]
+   #[case::subdomain("api.example.com")]
+   #[case::wildcard("*.example.com")]
+   #[case::hyphenated_domain("my-domain.org")]
+   fn test_validate_domain_pattern_valid(#[case] pattern: &str) {
+      assert!(validate_domain_pattern(pattern).is_ok());
    }
 
    #[test]
@@ -1131,10 +1034,11 @@ mod tests {
       assert!(matches!(err, Error::InvalidDomainPattern(_)));
    }
 
-   #[test]
-   fn test_validate_domain_pattern_whitespace_only() {
-      assert!(validate_domain_pattern("   ").is_err());
-      assert!(validate_domain_pattern("\t").is_err());
+   #[rstest]
+   #[case::spaces("   ")]
+   #[case::tab("\t")]
+   fn test_validate_domain_pattern_whitespace_only(#[case] pattern: &str) {
+      assert!(validate_domain_pattern(pattern).is_err());
    }
 
    #[test]
@@ -1145,27 +1049,16 @@ mod tests {
       assert!(err.to_string().contains("whitespace"));
    }
 
-   #[test]
-   fn test_validate_domain_pattern_leading_whitespace_rejected() {
-      assert!(validate_domain_pattern(" example.com").is_err());
-   }
-
-   #[test]
-   fn test_validate_domain_pattern_trailing_whitespace_rejected() {
-      assert!(validate_domain_pattern("example.com ").is_err());
-   }
-
-   #[test]
-   fn test_validate_domain_pattern_tab_whitespace_rejected() {
-      assert!(validate_domain_pattern("\texample.com").is_err());
-   }
-
-   #[test]
-   fn test_validate_domain_pattern_control_characters() {
-      assert!(validate_domain_pattern("example\n.com").is_err());
-      assert!(validate_domain_pattern("example\r.com").is_err());
-      assert!(validate_domain_pattern("example\t.com").is_err());
-      assert!(validate_domain_pattern("example\0.com").is_err());
+   #[rstest]
+   #[case::leading_space(" example.com")]
+   #[case::trailing_space("example.com ")]
+   #[case::leading_tab("\texample.com")]
+   #[case::embedded_newline("example\n.com")]
+   #[case::embedded_carriage_return("example\r.com")]
+   #[case::embedded_tab("example\t.com")]
+   #[case::embedded_null("example\0.com")]
+   fn test_validate_domain_pattern_rejected(#[case] pattern: &str) {
+      assert!(validate_domain_pattern(pattern).is_err());
    }
 
    #[test]
@@ -1181,13 +1074,14 @@ mod tests {
       assert!(validate_domain_pattern(&max_pattern).is_ok());
    }
 
-   #[test]
-   fn test_validate_domain_pattern_url_reserved_chars() {
-      assert!(validate_domain_pattern("example.com:8080").is_err());
-      assert!(validate_domain_pattern("example.com/path").is_err());
-      assert!(validate_domain_pattern("example.com?q=1").is_err());
-      assert!(validate_domain_pattern("example.com#frag").is_err());
-      assert!(validate_domain_pattern("user@example.com").is_err());
+   #[rstest]
+   #[case::port_colon("example.com:8080")]
+   #[case::path_slash("example.com/path")]
+   #[case::query_question_mark("example.com?q=1")]
+   #[case::fragment_hash("example.com#frag")]
+   #[case::userinfo_at("user@example.com")]
+   fn test_validate_domain_pattern_url_reserved_chars(#[case] pattern: &str) {
+      assert!(validate_domain_pattern(pattern).is_err());
    }
 
    #[test]
@@ -1212,10 +1106,13 @@ mod tests {
       assert!(err.to_string().contains("bare '*'"));
    }
 
-   #[test]
-   fn test_new_rejects_wildcard_with_empty_base() {
-      // "*.""  strips to "", which fails the empty check
-      let result = DomainAllowlist::new(vec!["*.".to_string()]);
+   #[rstest]
+   // "*." strips to "", which fails the empty check
+   #[case::wildcard_with_empty_base("*.")]
+   // The base domain after "*." contains a URL-reserved character
+   #[case::wildcard_with_invalid_base("*.com:443")]
+   fn test_new_rejects_invalid_wildcard_pattern(#[case] pattern: &str) {
+      let result = DomainAllowlist::new(vec![pattern.to_string()]);
 
       assert!(result.is_err());
       assert!(matches!(
@@ -1224,40 +1121,18 @@ mod tests {
       ));
    }
 
-   #[test]
-   fn test_new_rejects_wildcard_with_invalid_base() {
-      // The base domain after "*." contains a URL-reserved character
-      let result = DomainAllowlist::new(vec!["*.com:443".to_string()]);
-
-      assert!(result.is_err());
-      assert!(matches!(
-         result.unwrap_err(),
-         Error::InvalidDomainPattern(_)
-      ));
-   }
-
-   #[test]
-   fn test_validate_url_rejects_octal_ip() {
-      let al = allowlist(&["example.com"]);
-
-      // Octal IP for 127.0.0.1
-      let result = al.validate_url("https://0177.0.0.1/path");
-
-      assert!(result.is_err());
-      assert!(matches!(result.unwrap_err(), Error::IpAddressNotAllowed));
-   }
-
-   #[test]
-   fn test_init_patterns_validated() {
-      // Valid patterns work
-      assert!(DomainAllowlist::new(vec!["example.com".to_string()]).is_ok());
-      assert!(DomainAllowlist::new(vec!["*.example.com".to_string()]).is_ok());
-
-      // Invalid patterns rejected
-      assert!(DomainAllowlist::new(vec!["".to_string()]).is_err());
-      assert!(DomainAllowlist::new(vec!["*".to_string()]).is_err());
-      assert!(DomainAllowlist::new(vec!["example\n.com".to_string()]).is_err());
-      assert!(DomainAllowlist::new(vec!["example.com:443".to_string()]).is_err());
+   #[rstest]
+   #[case::valid_plain_domain("example.com", true)]
+   #[case::valid_wildcard("*.example.com", true)]
+   #[case::empty_pattern("", false)]
+   #[case::bare_wildcard("*", false)]
+   #[case::embedded_newline("example\n.com", false)]
+   #[case::port_colon("example.com:443", false)]
+   fn test_init_patterns_validated(#[case] pattern: &str, #[case] valid: bool) {
+      assert_eq!(
+         DomainAllowlist::new(vec![pattern.to_string()]).is_ok(),
+         valid
+      );
    }
 
    #[test]
@@ -1271,24 +1146,13 @@ mod tests {
       assert!(result.is_err());
    }
 
-   #[test]
-   fn test_add_patterns_rejects_empty_pattern() {
+   #[rstest]
+   #[case::empty_pattern("")]
+   #[case::port_colon("example.com:443")]
+   fn test_add_patterns_rejects_invalid_pattern(#[case] pattern: &str) {
       let mut al = allowlist(&[]);
 
-      let result = al.add_patterns(vec!["".to_string()]);
-
-      assert!(result.is_err());
-      assert!(matches!(
-         result.unwrap_err(),
-         Error::InvalidDomainPattern(_)
-      ));
-   }
-
-   #[test]
-   fn test_add_patterns_rejects_pattern_with_colon() {
-      let mut al = allowlist(&[]);
-
-      let result = al.add_patterns(vec!["example.com:443".to_string()]);
+      let result = al.add_patterns(vec![pattern.to_string()]);
 
       assert!(result.is_err());
       assert!(matches!(
@@ -1299,67 +1163,37 @@ mod tests {
 
    // --- subdomain_validator ---
 
-   #[test]
-   fn test_subdomain_validator_matches_base_domain() {
-      let matches = subdomain_validator("example.com");
+   #[rstest]
+   #[case::base_domain("example.com", "example.com", true)]
+   #[case::subdomain("example.com", "api.example.com", true)]
+   #[case::deep_subdomain("example.com", "deep.sub.example.com", true)]
+   #[case::partial_suffix("example.com", "notexample.com", false)]
+   #[case::unrelated_domain("example.com", "evil.com", false)]
+   #[case::mixed_case_base_lowercase_domain("Example.COM", "example.com", true)]
+   #[case::mixed_case_base_uppercase_subdomain("Example.COM", "API.EXAMPLE.COM", true)]
+   fn test_subdomain_validator(#[case] base: &str, #[case] domain: &str, #[case] expected: bool) {
+      let matches = subdomain_validator(base);
 
-      assert!(matches("example.com"));
-   }
-
-   #[test]
-   fn test_subdomain_validator_matches_subdomain() {
-      let matches = subdomain_validator("example.com");
-
-      assert!(matches("api.example.com"));
-      assert!(matches("deep.sub.example.com"));
-   }
-
-   #[test]
-   fn test_subdomain_validator_rejects_non_subdomain() {
-      let matches = subdomain_validator("example.com");
-
-      assert!(!matches("notexample.com"));
-      assert!(!matches("evil.com"));
-   }
-
-   #[test]
-   fn test_subdomain_validator_case_insensitive() {
-      let matches = subdomain_validator("Example.COM");
-
-      assert!(matches("example.com"));
-      assert!(matches("API.EXAMPLE.COM"));
+      assert_eq!(matches(domain), expected);
    }
 
    // --- exact_domains_validator ---
 
-   #[test]
-   fn test_exact_domains_validator_matches() {
-      let matches = exact_domains_validator(&["api.example.com", "cdn.example.com"]);
+   #[rstest]
+   #[case::first_listed_domain(&["api.example.com", "cdn.example.com"], "api.example.com", true)]
+   #[case::second_listed_domain(&["api.example.com", "cdn.example.com"], "cdn.example.com", true)]
+   #[case::sibling_subdomain(&["api.example.com"], "other.example.com", false)]
+   #[case::base_domain(&["api.example.com"], "example.com", false)]
+   #[case::mixed_case_domain(&["api.example.com"], "API.Example.COM", true)]
+   #[case::empty_list(&[], "anything.com", false)]
+   fn test_exact_domains_validator(
+      #[case] domains: &[&str],
+      #[case] domain: &str,
+      #[case] expected: bool,
+   ) {
+      let matches = exact_domains_validator(domains);
 
-      assert!(matches("api.example.com"));
-      assert!(matches("cdn.example.com"));
-   }
-
-   #[test]
-   fn test_exact_domains_validator_rejects_non_match() {
-      let matches = exact_domains_validator(&["api.example.com"]);
-
-      assert!(!matches("other.example.com"));
-      assert!(!matches("example.com"));
-   }
-
-   #[test]
-   fn test_exact_domains_validator_case_insensitive() {
-      let matches = exact_domains_validator(&["api.example.com"]);
-
-      assert!(matches("API.Example.COM"));
-   }
-
-   #[test]
-   fn test_exact_domains_validator_empty_list() {
-      let matches = exact_domains_validator(&[]);
-
-      assert!(!matches("anything.com"));
+      assert_eq!(matches(domain), expected);
    }
 
    // --- validate_parsed_url direct tests ---
@@ -1418,14 +1252,15 @@ mod tests {
 
    // --- Port-based access ---
 
-   #[test]
-   fn test_any_port_on_allowed_domain_is_accessible() {
+   // All ports should be allowed — port is not part of the domain check
+   #[rstest]
+   #[case::https_443("https://example.com:443/path")]
+   #[case::https_8443("https://example.com:8443/path")]
+   #[case::http_8080("http://example.com:8080/path")]
+   #[case::http_3000("http://example.com:3000/path")]
+   fn test_any_port_on_allowed_domain_is_accessible(#[case] url: &str) {
       let al = allowlist(&["example.com"]);
 
-      // All ports should be allowed — port is not part of the domain check
-      assert!(al.validate_url("https://example.com:443/path").is_ok());
-      assert!(al.validate_url("https://example.com:8443/path").is_ok());
-      assert!(al.validate_url("http://example.com:8080/path").is_ok());
-      assert!(al.validate_url("http://example.com:3000/path").is_ok());
+      assert!(al.validate_url(url).is_ok());
    }
 }
