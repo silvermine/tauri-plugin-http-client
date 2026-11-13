@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -873,6 +875,15 @@ fn calculate_backoff(
       return retry_after.min(config.max_retry_after);
    }
 
+   // A fresh randomized hash state avoids dependence on clock resolution.
+   let random = RandomState::new().hash_one(attempt);
+
+   calculate_exponential_backoff(config, attempt, random)
+}
+
+/// Calculates equal-jitter backoff from a supplied random value, without reading
+/// the clock or generating randomness, so every jitter offset can be tested.
+fn calculate_exponential_backoff(config: &RetryConfig, attempt: u32, random: u64) -> Duration {
    // Exponential backoff: initial * 2^(attempt-1)
    let exponent = (attempt - 1).min(31); // prevent overflow
    let base_ms = config.initial_backoff.as_millis() as u64;
@@ -881,16 +892,7 @@ fn calculate_backoff(
 
    // Equal jitter: base/2 + random(0, base/2)
    let half = capped_ms / 2;
-   let jitter = if half > 0 {
-      let nanos = std::time::SystemTime::now()
-         .duration_since(std::time::UNIX_EPOCH)
-         .unwrap_or_default()
-         .subsec_nanos() as u64;
-
-      nanos % half
-   } else {
-      0
-   };
+   let jitter = if half > 0 { random % half } else { 0 };
 
    Duration::from_millis(half + jitter)
 }
@@ -1934,34 +1936,101 @@ mod tests {
       assert_eq!(parse_retry_after_from_response(&resp), None);
    }
 
-   #[test]
-   fn test_calculate_backoff_applies_jitter() {
-      // base = 1994ms, so half = 997ms (prime): `nanos % half` keeps varying
-      // even on clocks coarser than 1ns.
-      //
-      // Known gap this test does not cover: the default config retries with
-      // half = 100, 200 and 400ms, and `subsec_nanos() % half` follows the
-      // clock's resolution. On macOS/iOS (1µs clock) retries 1 and 2 get no
-      // jitter and retry 3 gets 0 or 200ms. On Windows (100ns clock) retry 1
-      // gets none, retry 2 gets 0 or 100ms and retry 3 gets 0, 100, 200 or
-      // 300ms. CI runs on Linux (1ns clock), so it does not show this.
+   #[rstest]
+   #[case::first_retry(1, 100, 200)]
+   #[case::second_retry(2, 200, 400)]
+   #[case::third_retry(3, 400, 800)]
+   #[case::capped_retry(7, 5000, 10_000)]
+   fn test_calculate_exponential_backoff_reaches_every_offset(
+      #[case] attempt: u32,
+      #[case] lower_ms: u64,
+      #[case] upper_ms: u64,
+   ) {
+      let config = RetryConfig::default();
+      let expected: std::collections::HashSet<_> =
+         (lower_ms..upper_ms).map(Duration::from_millis).collect();
+      // Include a second full window of inputs to exercise modulo wrapping.
+      let seen: std::collections::HashSet<_> = (0..2 * (upper_ms - lower_ms))
+         .map(|random| calculate_exponential_backoff(&config, attempt, random))
+         .collect();
+
+      assert_eq!(seen, expected);
+   }
+
+   #[rstest]
+   #[case::first_retry_100(1, 100, 100)]
+   #[case::first_retry_1000(1, 1000, 100)]
+   #[case::second_retry_100(2, 100, 300)]
+   #[case::second_retry_1000(2, 1000, 200)]
+   #[case::third_retry_100(3, 100, 500)]
+   #[case::third_retry_1000(3, 1000, 600)]
+   #[case::above_one_second(7, 2000, 7000)]
+   #[case::near_cap(7, 4900, 9900)]
+   #[case::wraps_at_cap(7, 5000, 5000)]
+   #[case::full_width_random(1, u64::MAX, 115)]
+   fn test_calculate_exponential_backoff_with_supplied_random(
+      #[case] attempt: u32,
+      #[case] random: u64,
+      #[case] expected_ms: u64,
+   ) {
+      // Multiples of 100 and 1000 model coarse clock values. They still have
+      // restricted remainders; production supplies independently randomized
+      // values instead of relying on the clock for entropy.
+      let config = RetryConfig::default();
+
+      assert_eq!(
+         calculate_exponential_backoff(&config, attempt, random),
+         Duration::from_millis(expected_ms)
+      );
+   }
+
+   #[rstest]
+   // Preserve existing millisecond rounding: a capped base below 2ms gives
+   // half = 0 and no delay. Changing the backoff formula is outside this fix.
+   #[case::zero_initial(0, 10_000, 1, 0)]
+   #[case::zero_cap(200, 0, 1, 0)]
+   #[case::one_millisecond(1, 10_000, 1, 0)]
+   #[case::odd_milliseconds(199, 10_000, 1, 114)]
+   #[case::custom_cap(1000, 2000, 5, 1615)]
+   #[case::saturating_growth(1 << 63, 10_000, 2, 6615)]
+   #[case::high_attempt(200, 10_000, u32::MAX, 6615)]
+   fn test_calculate_exponential_backoff_edge_cases(
+      #[case] initial_ms: u64,
+      #[case] max_ms: u64,
+      #[case] attempt: u32,
+      #[case] expected_ms: u64,
+   ) {
       let config = RetryConfig {
-         initial_backoff: Duration::from_millis(1994),
-         max_backoff: Duration::from_secs(60),
+         initial_backoff: Duration::from_millis(initial_ms),
+         max_backoff: Duration::from_millis(max_ms),
          ..RetryConfig::default()
       };
+
+      assert_eq!(
+         calculate_exponential_backoff(&config, attempt, u64::MAX),
+         Duration::from_millis(expected_ms)
+      );
+   }
+
+   #[rstest]
+   #[case::first_retry(1, 100, 200)]
+   #[case::second_retry(2, 200, 400)]
+   #[case::third_retry(3, 400, 800)]
+   fn test_calculate_backoff_applies_jitter(
+      #[case] attempt: u32,
+      #[case] lower_ms: u64,
+      #[case] upper_ms: u64,
+   ) {
+      let config = RetryConfig::default();
+      let window = Duration::from_millis(lower_ms)..Duration::from_millis(upper_ms);
       let mut seen = std::collections::HashSet::new();
 
       for _ in 0..20 {
-         let backoff = calculate_backoff(&config, 1, None);
+         let backoff = calculate_backoff(&config, attempt, None);
 
-         assert!(
-            (Duration::from_millis(997)..Duration::from_millis(1994)).contains(&backoff),
-            "backoff = {backoff:?}"
-         );
+         assert!(window.contains(&backoff), "backoff = {backoff:?}");
 
          seen.insert(backoff);
-         std::thread::sleep(Duration::from_millis(1));
       }
 
       // A constant base/2 would pass the window check, so require variation
